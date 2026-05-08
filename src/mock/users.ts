@@ -1,0 +1,86 @@
+import type { User } from '@/types';
+
+export const mockUsers: User[] = [
+  {
+    id: 'user-001',
+    propertyId: 'prop-001',
+    name: 'Nguyễn Văn Admin',
+    email: 'admin@grandpalace.vn',
+    role: 'admin',
+    phone: '0901 234 567',
+    isActive: true,
+  },
+  {
+    id: 'user-002',
+    propertyId: 'prop-001',
+    name: 'Trần Thị Manager',
+    email: 'manager@grandpalace.vn',
+    role: 'manager',
+    phone: '0902 234 567',
+    isActive: true,
+  },
+  {
+    id: 'user-003',
+    propertyId: 'prop-001',
+    name: 'Lê Thị Hương',
+    email: 'huong@grandpalace.vn',
+    role: 'receptionist',
+    phone: '0903 234 567',
+    isActive: true,
+  },
+  {
+    id: 'user-004',
+    propertyId: 'prop-001',
+    name: 'Phạm Văn Minh',
+    email: 'minh@grandpalace.vn',
+    role: 'receptionist',
+    phone: '0904 234 567',
+    isActive: true,
+  },
+  {
+    id: 'user-005',
+    propertyId: 'prop-001',
+    name: 'Hoàng Thị Lan',
+    email: 'lan@grandpalace.vn',
+    role: 'hk_supervisor',
+    phone: '0905 234 567',
+    isActive: true,
+  },
+  {
+    id: 'user-006',
+    propertyId: 'prop-001',
+    name: 'Ngô Thị Mai',
+    email: 'mai@grandpalace.vn',
+    role: 'hk_staff',
+    phone: '0906 234 567',
+    isActive: true,
+  },
+  {
+    id: 'user-007',
+    propertyId: 'prop-001',
+    name: 'Đinh Văn Tuấn',
+    email: 'tuan@grandpalace.vn',
+    role: 'hk_staff',
+    phone: '0907 234 567',
+    isActive: true,
+  },
+  {
+    id: 'user-008',
+    propertyId: 'prop-001',
+    name: 'Vũ Thị Kế Toán',
+    email: 'ketoan@grandpalace.vn',
+    role: 'accountant',
+    phone: '0908 234 567',
+    isActive: true,
+  },
+];
+
+// Mock credentials for login
+export const mockCredentials: Record<string, { password: string; userId: string }> = {
+  'admin@grandpalace.vn': { password: 'admin123', userId: 'user-001' },
+  'manager@grandpalace.vn': { password: 'manager123', userId: 'user-002' },
+  'huong@grandpalace.vn': { password: 'recept123', userId: 'user-003' },
+  'lan@grandpalace.vn': { password: 'hksuper123', userId: 'user-005' },
+  'mai@grandpalace.vn': { password: 'hkstaff123', userId: 'user-006' },
+  'ketoan@grandpalace.vn': { password: 'acct123', userId: 'user-008' },
+};
