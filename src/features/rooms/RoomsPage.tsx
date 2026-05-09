@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
-import { mockRooms } from '@/mock/rooms';
-import { mockRoomTypes } from '@/mock/rooms';
+import { useQuery } from '@tanstack/react-query';
+import { fetchRoomTypes, fetchRooms, queryKeys } from '@/lib/data';
 import type { Room, RoomStatus } from '@/types';
-import { Search, Filter, Grid3X3, List, BedDouble, Wrench, AlertTriangle } from 'lucide-react';
+import { Search, Filter, Grid3X3, List, BedDouble, Wrench } from 'lucide-react';
 
 const statusConfig: Record<RoomStatus, { label: string; cls: string; dot: string }> = {
   vacant_clean:   { label: 'Sạch — Sẵn sàng', cls: 'vacant-clean',  dot: 'dot-green' },
@@ -31,11 +31,15 @@ export default function RoomsPage() {
   const [filterFloor, setFilterFloor] = useState<number|'all'>('all');
   const [filterType, setFilterType] = useState('all');
   const [selectedRoom, setSelectedRoom] = useState<Room|null>(null);
+  const roomsQuery = useQuery({ queryKey: queryKeys.rooms, queryFn: fetchRooms, refetchInterval: 30_000 });
+  const roomTypesQuery = useQuery({ queryKey: queryKeys.roomTypes, queryFn: fetchRoomTypes });
 
   const floors = [1,2,3,4,5];
-  const counts = statusCounts(mockRooms);
+  const rooms = roomsQuery.data ?? [];
+  const roomTypes = roomTypesQuery.data ?? [];
+  const counts = statusCounts(rooms);
 
-  const filtered = mockRooms.filter(r => {
+  const filtered = rooms.filter(r => {
     if (filterFloor !== 'all' && r.floor !== filterFloor) return false;
     if (filterStatus !== 'all' && r.status !== filterStatus) return false;
     if (filterType !== 'all' && r.roomTypeId !== filterType) return false;
@@ -46,7 +50,7 @@ export default function RoomsPage() {
   return (
     <div>
       <div className="page-header">
-        <div><h1>Quản lý phòng</h1><p>50 phòng · 5 tầng · 5 loại phòng</p></div>
+        <div><h1>Quản lý phòng</h1><p>{rooms.length || 50} phòng · 5 tầng · {roomTypes.length || 5} loại phòng</p></div>
         <div className="flex gap-8">
           <button className="btn btn-secondary btn-sm"><Filter size={14}/> Lọc</button>
           <button className="btn btn-primary btn-sm"><BedDouble size={14}/> Thêm phòng</button>

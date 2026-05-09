@@ -24,9 +24,29 @@ export type HKTaskStatus = 'pending' | 'in_progress' | 'done' | 'inspected' | 'r
 
 export type PaymentMethod = 'cash' | 'bank_transfer' | 'qr_manual' | 'card_manual' | 'gateway_later';
 
+export type PaymentStatus = 'draft' | 'posted' | 'finalized' | 'voided' | 'refunded';
+
+export type InvoiceStatus = 'draft' | 'issued' | 'voided';
+
+export type FolioStatus = 'open' | 'closed' | 'invoiced';
+
+export type BusinessDateStatus = 'open' | 'auditing' | 'closed';
+
 export type UserRole = 'admin' | 'manager' | 'receptionist' | 'hk_supervisor' | 'hk_staff' | 'accountant';
 
 export type BookingSource = 'walk_in' | 'phone' | 'facebook' | 'direct' | 'ota_manual' | 'website_later';
+
+export type FolioItemSourceType =
+  | 'room'
+  | 'manual_service'
+  | 'minibar'
+  | 'laundry'
+  | 'restaurant_later'
+  | 'event_later'
+  | 'payment'
+  | 'deposit'
+  | 'refund'
+  | 'other';
 
 // -------------------------
 export interface Property {
@@ -67,6 +87,19 @@ export interface RoomType {
   basePrice: number;
 }
 
+export interface RoomRate {
+  id: string;
+  propertyId: string;
+  roomTypeId: string;
+  rateCode: 'BAR' | 'WALK' | 'CORP' | 'SEASONAL';
+  name: string;
+  amount: number;
+  currency: string;
+  startDate?: string;
+  endDate?: string;
+  isActive: boolean;
+}
+
 export interface Room {
   id: string;
   propertyId: string;
@@ -81,6 +114,19 @@ export interface Room {
   currentGuestName?: string;
   currentBookingId?: string;
   checkOutDate?: string;
+}
+
+export interface MaintenanceTicket {
+  id: string;
+  propertyId: string;
+  roomId: string;
+  roomNumber: string;
+  title: string;
+  description?: string;
+  status: 'open' | 'in_progress' | 'resolved' | 'cancelled';
+  priority: 'low' | 'normal' | 'high' | 'urgent';
+  createdAt: string;
+  resolvedAt?: string;
 }
 
 export interface Guest {
@@ -100,6 +146,8 @@ export interface Guest {
   gender?: 'male' | 'female' | 'other';
   occupation?: string;
   currentAddress?: string;
+  stayPurpose?: string;
+  marketingConsent?: boolean;
   isVip: boolean;
   isBlacklisted: boolean;
   blacklistReason?: string;
@@ -142,7 +190,7 @@ export interface FolioItem {
   id: string;
   folioId: string;
   type: 'debit' | 'credit';
-  sourceType: 'room' | 'manual_service' | 'minibar' | 'laundry' | 'payment' | 'deposit' | 'other';
+  sourceType: FolioItemSourceType;
   description: string;
   quantity: number;
   unitPrice: number;
@@ -163,7 +211,40 @@ export interface Folio {
   totalDebits: number;
   totalCredits: number;
   balance: number;
-  status: 'open' | 'closed' | 'invoiced';
+  status: FolioStatus;
+  parentFolioId?: string;
+}
+
+export interface Payment {
+  id: string;
+  propertyId: string;
+  folioId: string;
+  method: PaymentMethod;
+  status: PaymentStatus;
+  amount: number;
+  reference?: string;
+  receivedAt: string;
+  receivedBy: string;
+}
+
+export interface Invoice {
+  id: string;
+  propertyId: string;
+  folioId: string;
+  invoiceNumber: string;
+  status: InvoiceStatus;
+  issuedAt?: string;
+  totalAmount: number;
+  pdfUrl?: string;
+}
+
+export interface BusinessDate {
+  id: string;
+  propertyId: string;
+  businessDate: string;
+  status: BusinessDateStatus;
+  closedAt?: string;
+  closedBy?: string;
 }
 
 export interface HKTask {

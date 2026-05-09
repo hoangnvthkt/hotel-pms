@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { mockGuests } from '@/mock/guests';
+import { useQuery } from '@tanstack/react-query';
+import { fetchGuests, queryKeys } from '@/lib/data';
 import type { Guest } from '@/types';
 import { Search, Plus, Star, ShieldAlert, Globe } from 'lucide-react';
 
@@ -9,8 +10,10 @@ export default function GuestsPage() {
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<'all'|'vip'|'blacklist'>('all');
   const [selected, setSelected] = useState<Guest|null>(null);
+  const guestsQuery = useQuery({ queryKey: queryKeys.guests, queryFn: fetchGuests });
+  const guests = guestsQuery.data ?? [];
 
-  const filtered = mockGuests.filter(g => {
+  const filtered = guests.filter(g => {
     if (filter === 'vip' && !g.isVip) return false;
     if (filter === 'blacklist' && !g.isBlacklisted) return false;
     if (search) {
@@ -23,7 +26,7 @@ export default function GuestsPage() {
   return (
     <div>
       <div className="page-header">
-        <div><h1>Khách hàng</h1><p>{mockGuests.length} hồ sơ · {mockGuests.filter(g=>g.isVip).length} VIP</p></div>
+        <div><h1>Khách hàng</h1><p>{guests.length} hồ sơ · {guests.filter(g=>g.isVip).length} VIP</p></div>
         <button className="btn btn-primary btn-sm"><Plus size={14}/> Thêm khách</button>
       </div>
 

@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
-import { mockBookings } from '@/mock/bookings';
+import { useQuery } from '@tanstack/react-query';
 import type { Booking, BookingStatus } from '@/types';
 import { Search, Plus, ChevronLeft, ChevronRight, CalendarDays } from 'lucide-react';
-import { format, addDays, startOfWeek, parseISO } from 'date-fns';
+import { format, addDays } from 'date-fns';
 import { vi } from 'date-fns/locale';
-import { mockRooms } from '@/mock/rooms';
+import { fetchBookings, fetchRooms, queryKeys } from '@/lib/data';
 
 const statusBadge: Record<BookingStatus, string> = {
   tentative:'badge-yellow', confirmed:'badge-green', checked_in:'badge-blue',
@@ -27,8 +27,12 @@ export default function BookingsPage() {
   const [filterStatus, setFilterStatus] = useState<BookingStatus|'all'>('all');
   const [calStart, setCalStart] = useState(new Date());
   const [selected, setSelected] = useState<Booking|null>(null);
+  const bookingsQuery = useQuery({ queryKey: queryKeys.bookings, queryFn: fetchBookings, refetchInterval: 30_000 });
+  const roomsQuery = useQuery({ queryKey: queryKeys.rooms, queryFn: fetchRooms, refetchInterval: 30_000 });
+  const bookings = bookingsQuery.data ?? [];
+  const rooms = roomsQuery.data ?? [];
 
-  const filtered = mockBookings.filter(b => {
+  const filtered = bookings.filter(b => {
     if (filterStatus !== 'all' && b.status !== filterStatus) return false;
     if (search && !b.guestName.toLowerCase().includes(search.toLowerCase()) && !b.bookingNumber.includes(search) && !b.roomNumber.includes(search)) return false;
     return true;
@@ -36,17 +40,17 @@ export default function BookingsPage() {
 
   // Calendar: show 14 days from calStart
   const calDays = Array.from({ length: 14 }, (_, i) => addDays(calStart, i));
-  const calRooms = mockRooms.filter(r => mockBookings.some(b => b.roomId === r.id)).slice(0, 15);
+  const calRooms = rooms.filter(r => bookings.some(b => b.roomId === r.id)).slice(0, 15);
 
   const getBookingForRoomDay = (roomId: string, day: Date) => {
     const d = format(day, 'yyyy-MM-dd');
-    return mockBookings.find(b => b.roomId === roomId && b.checkIn <= d && b.checkOut > d);
+    return bookings.find(b => b.roomId === roomId && b.checkIn <= d && b.checkOut > d);
   };
 
   return (
     <div>
       <div className="page-header">
-        <div><h1>Đặt phòng</h1><p>{mockBookings.length} booking · {mockBookings.filter(b=>b.status==='checked_in').length} đang ở</p></div>
+        <div><h1>Đặt phòng</h1><p>{bookings.length} booking · {bookings.filter(b=>b.status==='checked_in').length} đang ở</p></div>
         <div className="flex gap-8">
           <div style={{ display:'flex', border:'1px solid var(--border)', borderRadius:'var(--radius-sm)', overflow:'hidden' }}>
             {(['list','calendar'] as const).map(v => (

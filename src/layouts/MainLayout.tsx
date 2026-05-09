@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '@/features/auth/AuthContext';
+import { canAccessPath, firstAllowedPath } from '@/features/auth/rbac';
 import {
   LayoutDashboard, BedDouble, CalendarDays, Users, ConciergeBell,
-  Sparkles, Receipt, Moon, BarChart3, Settings, LogOut, Menu, Bell, ChevronRight
+  Sparkles, Receipt, Moon, BarChart3, Settings, LogOut, Menu, Bell
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { vi } from 'date-fns/locale';
@@ -32,7 +33,7 @@ export default function MainLayout() {
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(false);
 
-  const handleLogout = () => { logout(); navigate('/login'); };
+  const handleLogout = async () => { await logout(); navigate('/login'); };
 
   const sections = [
     { key: 'main', label: 'Chính' },
@@ -42,7 +43,8 @@ export default function MainLayout() {
 
   const initials = user ? user.name.split(' ').map(w=>w[0]).slice(-2).join('') : 'U';
 
-  const pageTitle = navItems.find(n => location.pathname.startsWith(n.to))?.label ?? 'Hotel PMS';
+  const allowedNavItems = navItems.filter(item => canAccessPath(user?.role, item.to));
+  const pageTitle = allowedNavItems.find(n => location.pathname.startsWith(n.to))?.label ?? 'Hotel PMS';
 
   return (
     <div className="app-layout">
@@ -61,7 +63,10 @@ export default function MainLayout() {
 
         <nav className="sidebar-nav">
           {sections.map(sec => {
-            const items = navItems.filter(n => n.section === sec.key);
+            const items = navItems
+              .filter(n => n.section === sec.key)
+              .filter(item => allowedNavItems.some(allowed => allowed.to === item.to));
+            if (items.length === 0) return null;
             return (
               <div key={sec.key}>
                 {!collapsed && <div className="sidebar-section-label">{sec.label}</div>}
@@ -107,6 +112,11 @@ export default function MainLayout() {
             <Menu size={17} />
           </button>
           <div className="topbar-title">{pageTitle}</div>
+          {!canAccessPath(user?.role, location.pathname) && location.pathname !== firstAllowedPath(user?.role) && (
+            <button className="btn btn-secondary btn-sm" onClick={() => navigate(firstAllowedPath(user?.role))}>
+              Về màn hình được phân quyền
+            </button>
+          )}
           <div className="topbar-date">
             {format(new Date(), 'EEEE, dd/MM/yyyy', { locale: vi })}
           </div>

@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
-import { mockHKTasks, mockLostFound } from '@/mock/housekeeping';
+import { useQuery } from '@tanstack/react-query';
+import { mockLostFound } from '@/mock/housekeeping';
+import { fetchHKTasks, queryKeys } from '@/lib/data';
 import type { HKTask, HKTaskStatus } from '@/types';
 import { Sparkles, Package, CheckCircle, XCircle, Clock, Play } from 'lucide-react';
 
@@ -28,12 +30,14 @@ const columns: Column[] = [
 
 export default function HousekeepingPage() {
   const [tab, setTab] = useState<'board'|'lost'>('board');
-  const [tasks, setTasks] = useState(mockHKTasks);
+  const tasksQuery = useQuery({ queryKey: queryKeys.hkTasks, queryFn: fetchHKTasks, refetchInterval: 30_000 });
+  const [localTasks, setLocalTasks] = useState<HKTask[] | null>(null);
+  const tasks = localTasks ?? tasksQuery.data ?? [];
 
   const rejected = tasks.filter(t => t.status === 'rejected');
 
   const moveTask = (id: string, newStatus: HKTaskStatus) => {
-    setTasks(ts => ts.map(t => t.id === id ? { ...t, status: newStatus } : t));
+    setLocalTasks(ts => (ts ?? tasks).map(t => t.id === id ? { ...t, status: newStatus } : t));
   };
 
   return (
@@ -53,7 +57,7 @@ export default function HousekeepingPage() {
       {tab === 'board' ? (
         <>
           {/* Kanban board */}
-          <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:14, marginBottom:16 }}>
+          <div className="hk-board">
             {columns.map(col => {
               const colTasks = tasks.filter(t => t.status === col.key);
               return (

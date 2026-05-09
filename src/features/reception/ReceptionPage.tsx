@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { mockBookings } from '@/mock/bookings';
+import { useQuery } from '@tanstack/react-query';
+import { fetchBookings, queryKeys } from '@/lib/data';
 import type { Booking } from '@/types';
 import { CheckCircle, LogOut, UserPlus, ArrowRightLeft } from 'lucide-react';
 import { format } from 'date-fns';
@@ -9,10 +10,12 @@ const fmt = (n: number) => new Intl.NumberFormat('vi-VN').format(n);
 
 export default function ReceptionPage() {
   const [tab, setTab] = useState<'arrivals'|'inhouse'|'departures'>('arrivals');
+  const bookingsQuery = useQuery({ queryKey: queryKeys.bookings, queryFn: fetchBookings, refetchInterval: 30_000 });
+  const bookings = bookingsQuery.data ?? [];
 
-  const arrivals = mockBookings.filter(b => b.checkIn === today && b.status === 'confirmed');
-  const inHouse = mockBookings.filter(b => b.status === 'checked_in');
-  const departures = mockBookings.filter(b => b.checkOut === today && b.status === 'checked_in');
+  const arrivals = bookings.filter(b => b.checkIn === today && b.status === 'confirmed');
+  const inHouse = bookings.filter(b => b.status === 'checked_in');
+  const departures = bookings.filter(b => b.checkOut === today && b.status === 'checked_in');
 
   const counts = { arrivals: arrivals.length, inhouse: inHouse.length, departures: departures.length };
   const lists: Record<string, Booking[]> = { arrivals, inhouse: inHouse, departures };
@@ -26,7 +29,7 @@ export default function ReceptionPage() {
       </div>
 
       {/* Tab bar */}
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12, marginBottom:24 }}>
+      <div className="reception-tabs">
         {([
           { key:'arrivals', label:'Đến hôm nay', icon:CheckCircle, color:'var(--success)' },
           { key:'inhouse', label:'Đang ở', icon:ArrowRightLeft, color:'var(--accent)' },

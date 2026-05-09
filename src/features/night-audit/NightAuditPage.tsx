@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { Moon, CheckCircle, AlertTriangle, DollarSign, Lock, ChevronRight } from 'lucide-react';
 import { mockDashboardStats } from '@/mock/reports';
+import { fetchDashboardStats, queryKeys } from '@/lib/data';
 import { format } from 'date-fns';
 
 const fmt = (n: number) => new Intl.NumberFormat('vi-VN').format(n);
@@ -16,7 +18,8 @@ const steps = [
 export default function NightAuditPage() {
   const [currentStep, setCurrentStep] = useState(0);
   const [completed, setCompleted] = useState<number[]>([]);
-  const s = mockDashboardStats;
+  const statsQuery = useQuery({ queryKey: queryKeys.dashboard, queryFn: fetchDashboardStats, refetchInterval: 30_000 });
+  const s = statsQuery.data ?? mockDashboardStats;
   const today = format(new Date(), 'dd/MM/yyyy');
 
   const completeStep = (stepId: number) => {
@@ -33,7 +36,7 @@ export default function NightAuditPage() {
         </div>
       </div>
 
-      <div style={{ display:'grid', gridTemplateColumns:'320px 1fr', gap:20 }}>
+      <div className="audit-layout">
         {/* Steps sidebar */}
         <div className="card" style={{ padding:0 }}>
           <div style={{ padding:'14px 16px', borderBottom:'1px solid var(--border)', fontWeight:700, fontSize:14, display:'flex', alignItems:'center', gap:8 }}>
@@ -120,7 +123,7 @@ export default function NightAuditPage() {
           {currentStep === 3 && (
             <div className="card">
               <div style={{ fontWeight:700, fontSize:16, marginBottom:16 }}>4. Revenue Summary — {today}</div>
-              <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:12, marginBottom:16 }}>
+              <div className="audit-summary-grid">
                 {[
                   { label:'Công suất', value:`${s.occupancyRate}%`, color:'var(--accent)' },
                   { label:'ADR', value:`${fmt(s.adr)}đ`, color:'var(--success)' },

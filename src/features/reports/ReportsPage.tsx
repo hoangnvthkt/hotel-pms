@@ -1,12 +1,15 @@
 import React from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { BarChart, Bar, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, PieChart, Pie, Cell } from 'recharts';
 import { mockOccupancyTrend, mockRevenueBreakdown, mockBookingSources, mockDashboardStats } from '@/mock/reports';
+import { fetchDashboardStats, queryKeys } from '@/lib/data';
 import { Download, FileText } from 'lucide-react';
 
 const fmt = (n: number) => new Intl.NumberFormat('vi-VN').format(n);
-const s = mockDashboardStats;
 
 export default function ReportsPage() {
+  const statsQuery = useQuery({ queryKey: queryKeys.dashboard, queryFn: fetchDashboardStats, refetchInterval: 30_000 });
+  const s = statsQuery.data ?? mockDashboardStats;
   return (
     <div>
       <div className="page-header">

@@ -1,6 +1,7 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from '@/features/auth/AuthContext';
+import { canAccessPath, firstAllowedPath } from '@/features/auth/rbac';
 import LoginPage from '@/features/auth/LoginPage';
 import MainLayout from '@/layouts/MainLayout';
 import DashboardPage from '@/features/dashboard/DashboardPage';
@@ -28,6 +29,18 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+function RouteGuard({ path, children }: { path: string; children: React.ReactNode }) {
+  const { user } = useAuth();
+  if (!canAccessPath(user?.role, path)) {
+    return <Navigate to={firstAllowedPath(user?.role)} replace />;
+  }
+  return <>{children}</>;
+}
+
+const guarded = (path: string, element: React.ReactNode) => (
+  <RouteGuard path={path}>{element}</RouteGuard>
+);
+
 function AppRoutes() {
   return (
     <Routes>
@@ -37,26 +50,31 @@ function AppRoutes() {
           <MainLayout />
         </ProtectedRoute>
       }>
-        <Route index element={<Navigate to="/dashboard" replace />} />
-        <Route path="dashboard" element={<DashboardPage />} />
-        <Route path="rooms" element={<RoomsPage />} />
-        <Route path="bookings" element={<BookingsPage />} />
-        <Route path="guests" element={<GuestsPage />} />
-        <Route path="reception" element={<ReceptionPage />} />
-        <Route path="housekeeping" element={<HousekeepingPage />} />
-        <Route path="folio" element={<FolioPage />} />
-        <Route path="night-audit" element={<NightAuditPage />} />
-        <Route path="reports" element={<ReportsPage />} />
+        <Route index element={<DefaultRedirect />} />
+        <Route path="dashboard" element={guarded('/dashboard', <DashboardPage />)} />
+        <Route path="rooms" element={guarded('/rooms', <RoomsPage />)} />
+        <Route path="bookings" element={guarded('/bookings', <BookingsPage />)} />
+        <Route path="guests" element={guarded('/guests', <GuestsPage />)} />
+        <Route path="reception" element={guarded('/reception', <ReceptionPage />)} />
+        <Route path="housekeeping" element={guarded('/housekeeping', <HousekeepingPage />)} />
+        <Route path="folio" element={guarded('/folio', <FolioPage />)} />
+        <Route path="night-audit" element={guarded('/night-audit', <NightAuditPage />)} />
+        <Route path="reports" element={guarded('/reports', <ReportsPage />)} />
         <Route path="settings" element={
-          <div style={{ textAlign:'center', padding:'60px 20px', color:'var(--text-secondary)' }}>
+          guarded('/settings', <div style={{ textAlign:'center', padding:'60px 20px', color:'var(--text-secondary)' }}>
             <div style={{ fontSize:40, marginBottom:16 }}>⚙️</div>
             <h2>Cài đặt — Coming soon</h2>
-          </div>
+          </div>)
         } />
       </Route>
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>
   );
+}
+
+function DefaultRedirect() {
+  const { user } = useAuth();
+  return <Navigate to={firstAllowedPath(user?.role)} replace />;
 }
 
 export default function App() {

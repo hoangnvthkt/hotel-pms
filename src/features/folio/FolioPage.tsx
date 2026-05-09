@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
-import { mockBookings } from '@/mock/bookings';
+import { useQuery } from '@tanstack/react-query';
+import { fetchBookings, queryKeys } from '@/lib/data';
+import type { Booking } from '@/types';
 import { Plus, CreditCard, Receipt, Printer } from 'lucide-react';
 
 const fmt = (n: number) => new Intl.NumberFormat('vi-VN').format(n);
@@ -8,8 +10,8 @@ type FolioItem = {
   id: string; type: 'debit'|'credit'; desc: string; date: string; amount: number; source: string;
 };
 
-const buildFolio = (bookingId: string): FolioItem[] => {
-  const b = mockBookings.find(bk => bk.id === bookingId);
+const buildFolio = (bookingId: string, bookings: Booking[]): FolioItem[] => {
+  const b = bookings.find(bk => bk.id === bookingId);
   if (!b) return [];
   return [
     { id:'fi-1', type:'debit', desc:`Tiền phòng ${b.roomNumber} — ${b.checkIn} → ${b.checkOut} (${b.nights} đêm)`, date:b.checkIn, amount:b.totalAmount, source:'room' },
@@ -20,13 +22,16 @@ const buildFolio = (bookingId: string): FolioItem[] => {
 };
 
 export default function FolioPage() {
-  const activeBks = mockBookings.filter(b => b.status === 'checked_in');
+  const bookingsQuery = useQuery({ queryKey: queryKeys.bookings, queryFn: fetchBookings, refetchInterval: 30_000 });
+  const bookings = bookingsQuery.data ?? [];
+  const activeBks = bookings.filter(b => b.status === 'checked_in');
   const [selectedId, setSelectedId] = useState(activeBks[0]?.id ?? '');
   const [addPayModal, setAddPayModal] = useState(false);
   const [addChargeModal, setAddChargeModal] = useState(false);
 
-  const booking = mockBookings.find(b => b.id === selectedId);
-  const items = buildFolio(selectedId);
+  const effectiveSelectedId = selectedId || activeBks[0]?.id || '';
+  const booking = bookings.find(b => b.id === effectiveSelectedId);
+  const items = buildFolio(effectiveSelectedId, bookings);
   const totalDebit = items.filter(i=>i.type==='debit').reduce((s,i)=>s+i.amount,0);
   const totalCredit = items.filter(i=>i.type==='credit').reduce((s,i)=>s+i.amount,0);
   const balance = totalDebit - totalCredit;
@@ -37,7 +42,7 @@ export default function FolioPage() {
         <div><h1>Folio & Thanh toán</h1><p>{activeBks.length} phòng đang có khách</p></div>
       </div>
 
-      <div style={{ display:'grid', gridTemplateColumns:'280px 1fr', gap:20 }}>
+      <div className="folio-layout">
         {/* Booking selector */}
         <div>
           <div className="card" style={{ padding:0 }}>
