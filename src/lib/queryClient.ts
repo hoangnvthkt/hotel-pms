@@ -20,4 +20,9 @@ export const queryKeys = {
   hkTasks: ['hkTasks'] as const,
   reports: ['reports'] as const,
   dashboard: ['reports', 'dashboard'] as const,
+  metadataOptions: (category?: string) => category ? ['metadata', category] as const : ['metadata'] as const,
+  staff: ['staff'] as const,
+  roles: ['roles'] as const,
+  property: ['property'] as const,
 };
+

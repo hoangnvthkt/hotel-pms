@@ -13,6 +13,7 @@ import HousekeepingPage from '@/features/housekeeping/HousekeepingPage';
 import FolioPage from '@/features/folio/FolioPage';
 import NightAuditPage from '@/features/night-audit/NightAuditPage';
 import ReportsPage from '@/features/reports/ReportsPage';
+import SettingsPage from '@/features/settings/SettingsPage';
 import '@/styles/index.css';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -60,12 +61,7 @@ function AppRoutes() {
         <Route path="folio" element={guarded('/folio', <FolioPage />)} />
         <Route path="night-audit" element={guarded('/night-audit', <NightAuditPage />)} />
         <Route path="reports" element={guarded('/reports', <ReportsPage />)} />
-        <Route path="settings" element={
-          guarded('/settings', <div style={{ textAlign:'center', padding:'60px 20px', color:'var(--text-secondary)' }}>
-            <div style={{ fontSize:40, marginBottom:16 }}>⚙️</div>
-            <h2>Cài đặt — Coming soon</h2>
-          </div>)
-        } />
+        <Route path="settings" element={guarded('/settings', <SettingsPage />)} />
       </Route>
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>

@@ -1,4 +1,4 @@
-import type { RoomType, Room, RoomStatus } from '@/types';
+import type { RoomType, Room, RoomRate, RoomStatus } from '@/types';
 
 export const mockRoomTypes: RoomType[] = [
   {
@@ -62,6 +62,29 @@ export const mockRoomTypes: RoomType[] = [
     basePrice: 4500000,
   },
 ];
+
+const defaultRateConfigs: Array<{
+  rateCode: string;
+  name: string;
+  multiplier: number;
+}> = [
+  { rateCode: 'BAR', name: 'Best Available Rate', multiplier: 1 },
+  { rateCode: 'WALK', name: 'Walk-in Rate', multiplier: 1.1 },
+  { rateCode: 'CORP', name: 'Corporate Rate', multiplier: 0.9 },
+];
+
+export const mockRoomRates: RoomRate[] = mockRoomTypes.flatMap(roomType =>
+  defaultRateConfigs.map(rate => ({
+    id: `rr-${roomType.code}-${rate.rateCode}`,
+    propertyId: roomType.propertyId,
+    roomTypeId: roomType.id,
+    rateCode: rate.rateCode,
+    name: rate.name,
+    amount: Math.round(roomType.basePrice * rate.multiplier),
+    currency: 'VND',
+    isActive: true,
+  })),
+);
 
 // Helpers
 const statuses: RoomStatus[] = [

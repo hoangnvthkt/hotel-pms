@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { mockLostFound } from '@/mock/housekeeping';
-import { fetchHKTasks, queryKeys } from '@/lib/data';
+import { fetchHKTasks, queryKeys, updateHKTaskStatus } from '@/lib/data';
 import type { HKTask, HKTaskStatus } from '@/types';
 import { Sparkles, Package, CheckCircle, XCircle, Clock, Play } from 'lucide-react';
 
@@ -29,15 +29,29 @@ const columns: Column[] = [
 ];
 
 export default function HousekeepingPage() {
+  const queryClient = useQueryClient();
   const [tab, setTab] = useState<'board'|'lost'>('board');
+  const [actionError, setActionError] = useState<string | null>(null);
   const tasksQuery = useQuery({ queryKey: queryKeys.hkTasks, queryFn: fetchHKTasks, refetchInterval: 30_000 });
-  const [localTasks, setLocalTasks] = useState<HKTask[] | null>(null);
-  const tasks = localTasks ?? tasksQuery.data ?? [];
+  const tasks = tasksQuery.data ?? [];
 
   const rejected = tasks.filter(t => t.status === 'rejected');
 
+  const statusMutation = useMutation({
+    mutationFn: ({ id, status }: { id: string; status: HKTaskStatus }) => updateHKTaskStatus(id, status),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.hkTasks }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.rooms }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.dashboard }),
+      ]);
+      setActionError(null);
+    },
+    onError: (err) => setActionError(err instanceof Error ? err.message : 'Không cập nhật được task housekeeping.'),
+  });
+
   const moveTask = (id: string, newStatus: HKTaskStatus) => {
-    setLocalTasks(ts => (ts ?? tasks).map(t => t.id === id ? { ...t, status: newStatus } : t));
+    statusMutation.mutate({ id, status: newStatus });
   };
 
   return (
@@ -53,6 +67,7 @@ export default function HousekeepingPage() {
           ))}
         </div>
       </div>
+      {actionError && <div className="form-error" style={{ marginBottom:12 }}>{actionError}</div>}
 
       {tab === 'board' ? (
         <>

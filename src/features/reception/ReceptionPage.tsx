@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { fetchBookings, queryKeys } from '@/lib/data';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { checkInBooking, checkOutBooking, fetchBookings, queryKeys } from '@/lib/data';
 import type { Booking } from '@/types';
 import { CheckCircle, LogOut, UserPlus, ArrowRightLeft } from 'lucide-react';
 import { format } from 'date-fns';
@@ -9,7 +9,9 @@ const today = new Date().toISOString().slice(0, 10);
 const fmt = (n: number) => new Intl.NumberFormat('vi-VN').format(n);
 
 export default function ReceptionPage() {
+  const queryClient = useQueryClient();
   const [tab, setTab] = useState<'arrivals'|'inhouse'|'departures'>('arrivals');
+  const [actionError, setActionError] = useState<string | null>(null);
   const bookingsQuery = useQuery({ queryKey: queryKeys.bookings, queryFn: fetchBookings, refetchInterval: 30_000 });
   const bookings = bookingsQuery.data ?? [];
 
@@ -21,12 +23,41 @@ export default function ReceptionPage() {
   const lists: Record<string, Booking[]> = { arrivals, inhouse: inHouse, departures };
   const current = lists[tab];
 
+  const invalidateOps = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: queryKeys.bookings }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.rooms }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.folios }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.hkTasks }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboard }),
+    ]);
+  };
+
+  const checkInMutation = useMutation({
+    mutationFn: (booking: Booking) => checkInBooking(booking.id, booking.roomId),
+    onSuccess: async () => {
+      await invalidateOps();
+      setActionError(null);
+    },
+    onError: (err) => setActionError(err instanceof Error ? err.message : 'Không check-in được.'),
+  });
+
+  const checkOutMutation = useMutation({
+    mutationFn: (booking: Booking) => checkOutBooking(booking.id),
+    onSuccess: async () => {
+      await invalidateOps();
+      setActionError(null);
+    },
+    onError: (err) => setActionError(err instanceof Error ? err.message : 'Không check-out được.'),
+  });
+
   return (
     <div>
       <div className="page-header">
         <div><h1>Lễ tân</h1><p>{format(new Date(), 'EEEE, dd/MM/yyyy')}</p></div>
         <button className="btn btn-primary btn-sm"><UserPlus size={14}/> Walk-in</button>
       </div>
+      {actionError && <div className="form-error" style={{ marginBottom:12 }}>{actionError}</div>}
 
       {/* Tab bar */}
       <div className="reception-tabs">
@@ -65,14 +96,14 @@ export default function ReceptionPage() {
                 <div style={{ fontWeight:600 }}>CI: {b.checkIn}</div>
                 <div style={{ color:'var(--text-secondary)' }}>CO: {b.checkOut}</div>
               </div>
-              {tab === 'arrivals' && <button className="btn btn-primary">✓ Check-in</button>}
+              {tab === 'arrivals' && <button className="btn btn-primary" disabled={checkInMutation.isPending} onClick={()=>checkInMutation.mutate(b)}>✓ Check-in</button>}
               {tab === 'inhouse' && (
                 <>
                   <button className="btn btn-secondary btn-sm"><ArrowRightLeft size={14}/> Đổi phòng</button>
                   <button className="btn btn-secondary btn-sm">Folio</button>
                 </>
               )}
-              {tab === 'departures' && <button className="btn btn-primary">⬡ Check-out</button>}
+              {tab === 'departures' && <button className="btn btn-primary" disabled={checkOutMutation.isPending} onClick={()=>checkOutMutation.mutate(b)}>⬡ Check-out</button>}
             </div>
           </div>
         ))}

@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import type { Booking, BookingStatus } from '@/types';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { Booking, BookingSource, BookingStatus } from '@/types';
 import { Search, Plus, ChevronLeft, ChevronRight, CalendarDays } from 'lucide-react';
 import { format, addDays } from 'date-fns';
 import { vi } from 'date-fns/locale';
-import { fetchBookings, fetchRooms, queryKeys } from '@/lib/data';
+import { cancelBooking, checkInBooking, checkOutBooking, createBooking, fetchBookings, fetchGuests, fetchRooms, queryKeys } from '@/lib/data';
+import { useAuth } from '@/features/auth/AuthContext';
 
 const statusBadge: Record<BookingStatus, string> = {
   tentative:'badge-yellow', confirmed:'badge-green', checked_in:'badge-blue',
@@ -22,15 +23,35 @@ const barClass: Record<BookingStatus, string> = {
 const fmt = (n:number) => new Intl.NumberFormat('vi-VN').format(n);
 
 export default function BookingsPage() {
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
   const [view, setView] = useState<'list'|'calendar'>('list');
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState<BookingStatus|'all'>('all');
   const [calStart, setCalStart] = useState(new Date());
   const [selected, setSelected] = useState<Booking|null>(null);
+  const [showCreate, setShowCreate] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [bookingForm, setBookingForm] = useState({
+    guestId: '',
+    roomId: '',
+    checkIn: new Date().toISOString().slice(0, 10),
+    checkOut: addDays(new Date(), 1).toISOString().slice(0, 10),
+    adults: 1,
+    children: 0,
+    source: 'direct' as BookingSource,
+    rateCode: 'BAR',
+    ratePerNight: 800000,
+    depositAmount: 0,
+    depositPaid: false,
+    notes: '',
+  });
   const bookingsQuery = useQuery({ queryKey: queryKeys.bookings, queryFn: fetchBookings, refetchInterval: 30_000 });
   const roomsQuery = useQuery({ queryKey: queryKeys.rooms, queryFn: fetchRooms, refetchInterval: 30_000 });
+  const guestsQuery = useQuery({ queryKey: queryKeys.guests, queryFn: fetchGuests });
   const bookings = bookingsQuery.data ?? [];
   const rooms = roomsQuery.data ?? [];
+  const guests = guestsQuery.data ?? [];
 
   const filtered = bookings.filter(b => {
     if (filterStatus !== 'all' && b.status !== filterStatus) return false;
@@ -47,6 +68,76 @@ export default function BookingsPage() {
     return bookings.find(b => b.roomId === roomId && b.checkIn <= d && b.checkOut > d);
   };
 
+  const invalidateOperations = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: queryKeys.bookings }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.rooms }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.folios }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.hkTasks }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboard }),
+    ]);
+  };
+
+  const createMutation = useMutation({
+    mutationFn: () => {
+      const guestId = bookingForm.guestId || guests[0]?.id;
+      const roomId = bookingForm.roomId || rooms.find(r => r.status === 'vacant_clean')?.id || rooms[0]?.id;
+      if (!guestId || !roomId) throw new Error('Cần chọn khách và phòng.');
+      if (bookingForm.checkOut <= bookingForm.checkIn) throw new Error('Ngày check-out phải sau check-in.');
+      return createBooking({
+        propertyId: user?.propertyId ?? rooms[0]?.propertyId ?? guests[0]?.propertyId ?? 'prop-001',
+        guestId,
+        roomId,
+        checkIn: bookingForm.checkIn,
+        checkOut: bookingForm.checkOut,
+        adults: bookingForm.adults,
+        children: bookingForm.children,
+        source: bookingForm.source,
+        rateCode: bookingForm.rateCode,
+        ratePerNight: bookingForm.ratePerNight,
+        depositAmount: bookingForm.depositAmount,
+        depositPaid: bookingForm.depositPaid,
+        notes: bookingForm.notes,
+      });
+    },
+    onSuccess: async () => {
+      await invalidateOperations();
+      setShowCreate(false);
+      setActionError(null);
+    },
+    onError: (err) => setActionError(err instanceof Error ? err.message : 'Không tạo được booking.'),
+  });
+
+  const cancelMutation = useMutation({
+    mutationFn: (bookingId: string) => cancelBooking(bookingId, 'Hủy từ giao diện PMS'),
+    onSuccess: async () => {
+      await invalidateOperations();
+      setSelected(null);
+      setActionError(null);
+    },
+    onError: (err) => setActionError(err instanceof Error ? err.message : 'Không hủy được booking.'),
+  });
+
+  const checkInMutation = useMutation({
+    mutationFn: (booking: Booking) => checkInBooking(booking.id, booking.roomId),
+    onSuccess: async () => {
+      await invalidateOperations();
+      setSelected(null);
+      setActionError(null);
+    },
+    onError: (err) => setActionError(err instanceof Error ? err.message : 'Không check-in được.'),
+  });
+
+  const checkOutMutation = useMutation({
+    mutationFn: (bookingId: string) => checkOutBooking(bookingId),
+    onSuccess: async () => {
+      await invalidateOperations();
+      setSelected(null);
+      setActionError(null);
+    },
+    onError: (err) => setActionError(err instanceof Error ? err.message : 'Không check-out được.'),
+  });
+
   return (
     <div>
       <div className="page-header">
@@ -60,9 +151,10 @@ export default function BookingsPage() {
               </button>
             ))}
           </div>
-          <button className="btn btn-primary btn-sm"><Plus size={14}/> Tạo booking</button>
+          <button className="btn btn-primary btn-sm" onClick={()=>setShowCreate(true)}><Plus size={14}/> Tạo booking</button>
         </div>
       </div>
+      {actionError && <div className="form-error" style={{ marginBottom:12 }}>{actionError}</div>}
 
       {/* Filters */}
       <div style={{ display:'flex', gap:10, marginBottom:20, flexWrap:'wrap', alignItems:'center' }}>
@@ -209,11 +301,53 @@ export default function BookingsPage() {
             </div>
             <div className="drawer-footer">
               <button className="btn btn-secondary flex-1" onClick={()=>setSelected(null)}>Đóng</button>
-              {selected.status==='confirmed' && <button className="btn btn-primary flex-1">Check-in</button>}
-              {selected.status==='checked_in' && <button className="btn btn-primary flex-1">Check-out</button>}
+              {['tentative','confirmed'].includes(selected.status) && <button className="btn btn-danger" disabled={cancelMutation.isPending} onClick={()=>cancelMutation.mutate(selected.id)}>Hủy</button>}
+              {selected.status==='confirmed' && <button className="btn btn-primary flex-1" disabled={checkInMutation.isPending} onClick={()=>checkInMutation.mutate(selected)}>Check-in</button>}
+              {selected.status==='checked_in' && <button className="btn btn-primary flex-1" disabled={checkOutMutation.isPending} onClick={()=>checkOutMutation.mutate(selected.id)}>Check-out</button>}
             </div>
           </div>
         </>
+      )}
+
+      {showCreate && (
+        <div className="modal-overlay" onClick={()=>setShowCreate(false)}>
+          <form className="modal" style={{ maxWidth:620 }} onClick={e=>e.stopPropagation()} onSubmit={e=>{ e.preventDefault(); createMutation.mutate(); }}>
+            <div className="modal-header">
+              <span className="modal-title">Tạo booking</span>
+              <button type="button" className="modal-close" onClick={()=>setShowCreate(false)}>✕</button>
+            </div>
+            <div className="modal-body">
+              <div style={{ display:'grid', gridTemplateColumns:'repeat(2, minmax(0, 1fr))', gap:14 }}>
+                <div className="form-group">
+                  <label className="form-label">Khách</label>
+                  <select className="form-input form-select" value={bookingForm.guestId || guests[0]?.id || ''} onChange={e=>setBookingForm(f=>({...f, guestId:e.target.value}))}>
+                    {guests.map(g => <option key={g.id} value={g.id}>{g.fullName} · {g.phone}</option>)}
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Phòng</label>
+                  <select className="form-input form-select" value={bookingForm.roomId || rooms.find(r=>r.status==='vacant_clean')?.id || rooms[0]?.id || ''} onChange={e=>setBookingForm(f=>({...f, roomId:e.target.value}))}>
+                    {rooms.map(r => <option key={r.id} value={r.id}>P.{r.number} · {r.roomTypeName} · {r.status}</option>)}
+                  </select>
+                </div>
+                <div className="form-group"><label className="form-label">Check-in</label><input className="form-input" type="date" value={bookingForm.checkIn} onChange={e=>setBookingForm(f=>({...f, checkIn:e.target.value}))}/></div>
+                <div className="form-group"><label className="form-label">Check-out</label><input className="form-input" type="date" value={bookingForm.checkOut} onChange={e=>setBookingForm(f=>({...f, checkOut:e.target.value}))}/></div>
+                <div className="form-group"><label className="form-label">Người lớn</label><input className="form-input" type="number" min={1} value={bookingForm.adults} onChange={e=>setBookingForm(f=>({...f, adults:Number(e.target.value)}))}/></div>
+                <div className="form-group"><label className="form-label">Trẻ em</label><input className="form-input" type="number" min={0} value={bookingForm.children} onChange={e=>setBookingForm(f=>({...f, children:Number(e.target.value)}))}/></div>
+                <div className="form-group"><label className="form-label">Nguồn</label><select className="form-input form-select" value={bookingForm.source} onChange={e=>setBookingForm(f=>({...f, source:e.target.value as BookingSource}))}><option value="direct">Direct</option><option value="walk_in">Walk-in</option><option value="phone">Phone</option><option value="facebook">Facebook</option><option value="ota_manual">OTA Manual</option></select></div>
+                <div className="form-group"><label className="form-label">Rate code</label><input className="form-input" value={bookingForm.rateCode} onChange={e=>setBookingForm(f=>({...f, rateCode:e.target.value}))}/></div>
+                <div className="form-group"><label className="form-label">Giá/đêm</label><input className="form-input" type="number" min={0} value={bookingForm.ratePerNight} onChange={e=>setBookingForm(f=>({...f, ratePerNight:Number(e.target.value)}))}/></div>
+                <div className="form-group"><label className="form-label">Đặt cọc</label><input className="form-input" type="number" min={0} value={bookingForm.depositAmount} onChange={e=>setBookingForm(f=>({...f, depositAmount:Number(e.target.value)}))}/></div>
+                <label style={{ display:'flex', alignItems:'center', gap:8, fontSize:13 }}><input type="checkbox" checked={bookingForm.depositPaid} onChange={e=>setBookingForm(f=>({...f, depositPaid:e.target.checked}))}/> Đã nhận cọc</label>
+                <div className="form-group" style={{ gridColumn:'span 2' }}><label className="form-label">Ghi chú</label><textarea className="form-input" rows={2} value={bookingForm.notes} onChange={e=>setBookingForm(f=>({...f, notes:e.target.value}))}/></div>
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button type="button" className="btn btn-secondary" onClick={()=>setShowCreate(false)}>Hủy</button>
+              <button type="submit" className="btn btn-primary" disabled={createMutation.isPending}>Tạo booking</button>
+            </div>
+          </form>
+        </div>
       )}
     </div>
   );

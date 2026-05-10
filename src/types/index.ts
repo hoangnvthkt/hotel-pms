@@ -91,7 +91,7 @@ export interface RoomRate {
   id: string;
   propertyId: string;
   roomTypeId: string;
-  rateCode: 'BAR' | 'WALK' | 'CORP' | 'SEASONAL';
+  rateCode: string;
   name: string;
   amount: number;
   currency: string;

@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { fetchRoomTypes, fetchRooms, queryKeys } from '@/lib/data';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { createRoom, deleteRoom, fetchRoomTypes, fetchRooms, queryKeys, updateRoomStatus } from '@/lib/data';
+import { useAuth } from '@/features/auth/AuthContext';
 import type { Room, RoomStatus } from '@/types';
-import { Search, Filter, Grid3X3, List, BedDouble, Wrench } from 'lucide-react';
+import { Search, Filter, Grid3X3, List, BedDouble, Wrench, Trash2 } from 'lucide-react';
 
 const statusConfig: Record<RoomStatus, { label: string; cls: string; dot: string }> = {
   vacant_clean:   { label: 'Sạch — Sẵn sàng', cls: 'vacant-clean',  dot: 'dot-green' },
@@ -25,12 +26,17 @@ const statusCounts = (rooms: Room[]) => ({
 });
 
 export default function RoomsPage() {
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
   const [view, setView] = useState<'grid'|'list'>('grid');
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState<RoomStatus|'all'>('all');
   const [filterFloor, setFilterFloor] = useState<number|'all'>('all');
   const [filterType, setFilterType] = useState('all');
   const [selectedRoom, setSelectedRoom] = useState<Room|null>(null);
+  const [showAddRoom, setShowAddRoom] = useState(false);
+  const [roomForm, setRoomForm] = useState({ number: '', floor: 1, roomTypeId: '', notes: '' });
+  const [actionError, setActionError] = useState<string | null>(null);
   const roomsQuery = useQuery({ queryKey: queryKeys.rooms, queryFn: fetchRooms, refetchInterval: 30_000 });
   const roomTypesQuery = useQuery({ queryKey: queryKeys.roomTypes, queryFn: fetchRoomTypes });
 
@@ -47,15 +53,64 @@ export default function RoomsPage() {
     return true;
   });
 
+  const invalidateRooms = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: queryKeys.rooms }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboard }),
+    ]);
+  };
+
+  const addRoomMutation = useMutation({
+    mutationFn: () => {
+      const roomTypeId = roomForm.roomTypeId || roomTypes[0]?.id;
+      if (!roomTypeId) throw new Error('Chưa có loại phòng để tạo phòng.');
+      return createRoom({
+        propertyId: user?.propertyId ?? rooms[0]?.propertyId ?? 'prop-001',
+        roomTypeId,
+        number: roomForm.number,
+        floor: roomForm.floor,
+        notes: roomForm.notes,
+      });
+    },
+    onSuccess: async () => {
+      await invalidateRooms();
+      setShowAddRoom(false);
+      setRoomForm({ number: '', floor: 1, roomTypeId: '', notes: '' });
+      setActionError(null);
+    },
+    onError: (err) => setActionError(err instanceof Error ? err.message : 'Không thêm được phòng.'),
+  });
+
+  const statusMutation = useMutation({
+    mutationFn: ({ id, status }: { id: string; status: RoomStatus }) => updateRoomStatus(id, status),
+    onSuccess: async () => {
+      await invalidateRooms();
+      setSelectedRoom(null);
+      setActionError(null);
+    },
+    onError: (err) => setActionError(err instanceof Error ? err.message : 'Không đổi được trạng thái phòng.'),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: deleteRoom,
+    onSuccess: async () => {
+      await invalidateRooms();
+      setSelectedRoom(null);
+      setActionError(null);
+    },
+    onError: (err) => setActionError(err instanceof Error ? err.message : 'Không xóa/deactivate được phòng.'),
+  });
+
   return (
     <div>
       <div className="page-header">
         <div><h1>Quản lý phòng</h1><p>{rooms.length || 50} phòng · 5 tầng · {roomTypes.length || 5} loại phòng</p></div>
         <div className="flex gap-8">
           <button className="btn btn-secondary btn-sm"><Filter size={14}/> Lọc</button>
-          <button className="btn btn-primary btn-sm"><BedDouble size={14}/> Thêm phòng</button>
+          <button className="btn btn-primary btn-sm" onClick={()=>setShowAddRoom(true)}><BedDouble size={14}/> Thêm phòng</button>
         </div>
       </div>
+      {actionError && <div className="form-error" style={{ marginBottom:12 }}>{actionError}</div>}
 
       {/* Status summary */}
       <div style={{ display:'flex', gap:10, marginBottom:20, flexWrap:'wrap' }}>
@@ -211,6 +266,8 @@ export default function RoomsPage() {
                 <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
                   {(['vacant_clean','vacant_dirty','out_of_order','blocked'] as RoomStatus[]).map(s=>(
                     <button key={s} className="btn btn-secondary btn-sm"
+                      disabled={statusMutation.isPending || s===selectedRoom.status}
+                      onClick={()=>statusMutation.mutate({ id: selectedRoom.id, status: s })}
                       style={{ opacity: s===selectedRoom.status ? .5:1 }}>
                       {statusConfig[s].label}
                     </button>
@@ -220,9 +277,47 @@ export default function RoomsPage() {
             </div>
             <div className="modal-footer">
               <button className="btn btn-secondary" onClick={()=>setSelectedRoom(null)}>Đóng</button>
+              <button className="btn btn-danger" disabled={deleteMutation.isPending} onClick={()=>deleteMutation.mutate(selectedRoom.id)}><Trash2 size={14}/> Deactivate</button>
               <button className="btn btn-primary"><Wrench size={14}/> Tạo ticket bảo trì</button>
             </div>
           </div>
+        </div>
+      )}
+
+      {showAddRoom && (
+        <div className="modal-overlay" onClick={()=>setShowAddRoom(false)}>
+          <form className="modal" style={{ maxWidth:460 }} onClick={e=>e.stopPropagation()} onSubmit={e=>{ e.preventDefault(); addRoomMutation.mutate(); }}>
+            <div className="modal-header">
+              <span className="modal-title">Thêm phòng</span>
+              <button type="button" className="modal-close" onClick={()=>setShowAddRoom(false)}>✕</button>
+            </div>
+            <div className="modal-body">
+              <div style={{ display:'grid', gap:14 }}>
+                <div className="form-group">
+                  <label className="form-label">Số phòng</label>
+                  <input className="form-input" required value={roomForm.number} onChange={e=>setRoomForm(f=>({...f, number:e.target.value}))}/>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Tầng</label>
+                  <input className="form-input" required type="number" min={1} value={roomForm.floor} onChange={e=>setRoomForm(f=>({...f, floor:Number(e.target.value)}))}/>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Loại phòng</label>
+                  <select className="form-input form-select" required value={roomForm.roomTypeId || roomTypes[0]?.id || ''} onChange={e=>setRoomForm(f=>({...f, roomTypeId:e.target.value}))}>
+                    {roomTypes.map(rt => <option key={rt.id} value={rt.id}>{rt.code} · {rt.name}</option>)}
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Ghi chú</label>
+                  <textarea className="form-input" rows={2} value={roomForm.notes} onChange={e=>setRoomForm(f=>({...f, notes:e.target.value}))}/>
+                </div>
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button type="button" className="btn btn-secondary" onClick={()=>setShowAddRoom(false)}>Hủy</button>
+              <button type="submit" className="btn btn-primary" disabled={addRoomMutation.isPending}>Thêm phòng</button>
+            </div>
+          </form>
         </div>
       )}
     </div>

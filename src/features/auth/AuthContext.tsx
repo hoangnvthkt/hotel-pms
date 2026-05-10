@@ -26,7 +26,7 @@ async function loadSupabaseUser(authUserId: string, email?: string): Promise<Use
 
   const { data, error } = await supabase
     .from('profiles')
-    .select('id, property_id, full_name, email, phone, is_active, profile_roles(roles(name))')
+    .select('id, property_id, full_name, email, phone, is_active, profile_roles(role)')
     .eq('id', authUserId)
     .maybeSingle();
 
@@ -40,11 +40,13 @@ async function loadSupabaseUser(authUserId: string, email?: string): Promise<Use
     email: string | null;
     phone: string | null;
     is_active: boolean | null;
-    profile_roles?: Array<{ roles?: { name?: string } | null }> | null;
+    profile_roles?: Array<{ role?: string }> | null;
   };
 
-  const roleName = row.profile_roles?.map(pr => pr.roles?.name).find(isUserRole);
-  if (!roleName) throw new Error('User profile has no supported PMS role.');
+  if (row.is_active === false) throw new Error('Tài khoản đã bị vô hiệu hóa. Liên hệ quản trị viên.');
+
+  const roleName = row.profile_roles?.map(pr => pr.role).find(isUserRole);
+  if (!roleName) throw new Error('Tài khoản chưa được phân quyền. Liên hệ quản trị viên.');
 
   return {
     id: row.id,
