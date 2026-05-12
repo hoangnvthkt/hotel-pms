@@ -1,174 +1,327 @@
-import React, { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { Moon, CheckCircle, AlertTriangle, DollarSign, Lock, ChevronRight } from 'lucide-react';
-import { mockDashboardStats } from '@/mock/reports';
-import { fetchDashboardStats, queryKeys } from '@/lib/data';
-import { format } from 'date-fns';
+import React from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  AlertTriangle,
+  CheckCircle,
+  ChevronRight,
+  DollarSign,
+  Lock,
+  Moon,
+  RefreshCw,
+} from 'lucide-react';
+import { useAuth } from '@/features/auth/AuthContext';
+import {
+  fetchCurrentBusinessDate,
+  fetchNightAuditLogs,
+  fetchNightAuditPrecheck,
+  queryKeys,
+  runNightAudit,
+} from '@/lib/data';
+import { errorMessage } from '@/lib/errors';
+import type { NightAuditIssue, NightAuditPrecheck } from '@/types';
 
 const fmt = (n: number) => new Intl.NumberFormat('vi-VN').format(n);
+const money = (n: number) => `${fmt(n)}đ`;
+
+const formatDate = (value?: string) => {
+  if (!value) return '—';
+  const date = new Date(value.includes('T') ? value : `${value}T00:00:00+07:00`);
+  return new Intl.DateTimeFormat('vi-VN').format(date);
+};
 
 const steps = [
-  { id:1, label:'Kiểm tra trước audit', desc:'Phòng chưa check-in, HK task còn mở', icon:AlertTriangle },
-  { id:2, label:'Post room charges', desc:'Tự động ghi tiền phòng vào folio', icon:DollarSign },
-  { id:3, label:'Kiểm tra discrepancy', desc:'Folio chưa đóng, payment thiếu', icon:CheckCircle },
-  { id:4, label:'Revenue summary', desc:'ADR, RevPAR, công suất, doanh thu', icon:Moon },
-  { id:5, label:'Đóng ngày & xác nhận', desc:'Lock ngày cũ, chuyển sang ngày mới', icon:Lock },
+  { id: 1, label: 'Pre-check', desc: 'Checkout, folio, payment, HK', icon: AlertTriangle },
+  { id: 2, label: 'Post tiền phòng', desc: 'Ghi room charge cho khách đang ở', icon: DollarSign },
+  { id: 3, label: 'No-show', desc: 'Đánh dấu booking quá hạn', icon: CheckCircle },
+  { id: 4, label: 'Revenue', desc: 'Tính lại doanh thu trong ngày', icon: Moon },
+  { id: 5, label: 'Đóng ngày', desc: 'Lock ngày cũ và mở ngày mới', icon: Lock },
 ];
 
-export default function NightAuditPage() {
-  const [currentStep, setCurrentStep] = useState(0);
-  const [completed, setCompleted] = useState<number[]>([]);
-  const statsQuery = useQuery({ queryKey: queryKeys.dashboard, queryFn: fetchDashboardStats, refetchInterval: 30_000 });
-  const s = statsQuery.data ?? mockDashboardStats;
-  const today = format(new Date(), 'dd/MM/yyyy');
+const stepLabel: Record<string, string> = {
+  pre_check: 'Pre-check',
+  pre_check_passed: 'Pre-check đạt',
+  pre_check_blocked: 'Pre-check bị chặn',
+  revenue_recalc: 'Tính doanh thu',
+  complete: 'Hoàn tất',
+};
 
-  const completeStep = (stepId: number) => {
-    setCompleted(c => [...c, stepId]);
-    if (currentStep < steps.length) setCurrentStep(currentStep + 1);
+function IssueList({ title, count, items, tone }: { title: string; count: number; items: NightAuditIssue[]; tone: 'danger' | 'warning' }) {
+  const border = tone === 'danger' ? '#fecaca' : '#fde68a';
+  const background = tone === 'danger' ? 'var(--danger-light)' : 'var(--warning-light)';
+
+  return (
+    <div style={{ border: `1px solid ${border}`, background, borderRadius: 'var(--radius)', padding: 14 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center' }}>
+        <strong>{title}</strong>
+        <span className={tone === 'danger' ? 'badge badge-red' : 'badge badge-yellow'}>{count}</span>
+      </div>
+      {items.length > 0 && (
+        <div style={{ marginTop: 10, display: 'grid', gap: 8 }}>
+          {items.slice(0, 5).map((item, index) => (
+            <div
+              key={`${item.bookingId ?? item.folioId ?? item.paymentId ?? item.depositId ?? item.taskId ?? index}`}
+              style={{ display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 13, color: 'var(--text-primary)' }}
+            >
+              <span>
+                {item.roomNumber ? `Phòng ${item.roomNumber} - ` : ''}
+                {item.bookingNumber ?? item.folioNumber ?? item.label ?? item.status ?? 'Mục cần xử lý'}
+                {item.guestName ? ` - ${item.guestName}` : ''}
+              </span>
+              <strong>
+                {typeof item.balance === 'number'
+                  ? money(item.balance)
+                  : typeof item.amount === 'number'
+                    ? money(item.amount)
+                    : item.date
+                      ? formatDate(item.date)
+                      : ''}
+              </strong>
+            </div>
+          ))}
+          {items.length > 5 && (
+            <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Còn {items.length - 5} mục khác.</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PrecheckSummary({ precheck }: { precheck: NightAuditPrecheck }) {
+  const cards = [
+    { label: 'Blockers', value: precheck.blockersCount, color: precheck.blockersCount > 0 ? 'var(--danger)' : 'var(--success)' },
+    { label: 'No-show dự kiến', value: precheck.summary.noShowCandidates, color: 'var(--accent-dark)' },
+    { label: 'Room charges', value: precheck.summary.roomChargeCandidates, color: 'var(--primary)' },
+    { label: 'Tiền phòng dự kiến', value: money(precheck.summary.roomChargeTotal), color: 'var(--primary-dark)' },
+  ];
+
+  return (
+    <div className="audit-summary-grid">
+      {cards.map(item => (
+        <div key={item.label} className="kpi-card">
+          <div className="kpi-label">{item.label}</div>
+          <div className="kpi-value" style={{ color: item.color }}>{item.value}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export default function NightAuditPage() {
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
+  const propertyId = user?.propertyId ?? '';
+
+  const businessDateQuery = useQuery({
+    queryKey: queryKeys.businessDate,
+    queryFn: () => fetchCurrentBusinessDate(propertyId),
+    enabled: Boolean(propertyId),
+  });
+
+  const businessDate = businessDateQuery.data?.businessDate;
+
+  const precheckQuery = useQuery({
+    queryKey: queryKeys.nightAuditPrecheck(businessDate),
+    queryFn: () => fetchNightAuditPrecheck(propertyId, businessDate!),
+    enabled: Boolean(propertyId && businessDate),
+    refetchInterval: 30_000,
+  });
+
+  const logsQuery = useQuery({
+    queryKey: queryKeys.nightAuditLogs(businessDate),
+    queryFn: () => fetchNightAuditLogs(propertyId, businessDate!),
+    enabled: Boolean(propertyId && businessDate),
+  });
+
+  const runMutation = useMutation({
+    mutationFn: () => runNightAudit(propertyId, businessDate!),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.businessDate }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.nightAuditPrecheck(businessDate) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.nightAuditLogs(businessDate) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.dashboard }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.notifications }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.notificationCount }),
+      ]);
+    },
+  });
+
+  const precheck = precheckQuery.data;
+  const runResult = runMutation.data;
+  const closed = businessDateQuery.data?.status === 'closed' || Boolean(runResult);
+  const canRun = Boolean(precheck?.canRun && !closed && !runMutation.isPending);
+  const isLoading = businessDateQuery.isLoading || precheckQuery.isLoading;
+
+  const refresh = () => {
+    queryClient.invalidateQueries({ queryKey: queryKeys.businessDate });
+    if (businessDate) {
+      queryClient.invalidateQueries({ queryKey: queryKeys.nightAuditPrecheck(businessDate) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.nightAuditLogs(businessDate) });
+    }
   };
 
   return (
     <div>
       <div className="page-header">
-        <div><h1>Night Audit</h1><p>Ngày kinh doanh: {today}</p></div>
-        <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-          <span className="badge badge-yellow">Ngày đang mở</span>
+        <div>
+          <h1>Night Audit</h1>
+          <p>Ngày kinh doanh: {formatDate(businessDate)}</p>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span className={closed ? 'badge badge-green' : 'badge badge-yellow'}>
+            {closed ? 'Đã đóng' : 'Ngày đang mở'}
+          </span>
+          <button className="btn btn-secondary" onClick={refresh} disabled={isLoading || runMutation.isPending}>
+            <RefreshCw size={14} /> Làm mới
+          </button>
         </div>
       </div>
 
       <div className="audit-layout">
-        {/* Steps sidebar */}
-        <div className="card" style={{ padding:0 }}>
-          <div style={{ padding:'14px 16px', borderBottom:'1px solid var(--border)', fontWeight:700, fontSize:14, display:'flex', alignItems:'center', gap:8 }}>
-            <Moon size={16} color="var(--purple)"/> Quy trình Night Audit
+        <div className="card" style={{ padding: 0 }}>
+          <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)', fontWeight: 700, fontSize: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Moon size={16} color="var(--primary)" /> Quy trình đóng ngày
           </div>
-          <div style={{ padding:'8px 0' }}>
-            {steps.map((step, idx) => {
-              const done = completed.includes(step.id);
-              const active = currentStep === idx;
+          <div style={{ padding: '8px 0' }}>
+            {steps.map((step, index) => {
+              const done = Boolean(runResult) || (index === 0 && precheck?.canRun);
+              const active = !runResult && ((index === 0 && !precheck?.canRun) || (index === 1 && precheck?.canRun));
+              const Icon = step.icon;
               return (
-                <div key={step.id} className="audit-step" style={{ padding:'12px 16px', cursor: active?'pointer':'default', background:active?'var(--accent-light)':undefined }}
-                  onClick={()=>{ if(active) setCurrentStep(idx); }}>
-                  <div className={`audit-step-num ${done?'done':active?'active':'pending'}`}>{done?'✓':step.id}</div>
-                  <div style={{ flex:1 }}>
-                    <div style={{ fontWeight:600, fontSize:13, color:active?'var(--accent)':done?'var(--success)':undefined }}>{step.label}</div>
-                    <div style={{ fontSize:12, color:'var(--text-secondary)', marginTop:2 }}>{step.desc}</div>
+                <div
+                  key={step.id}
+                  className="audit-step"
+                  style={{ padding: '12px 16px', background: active ? 'var(--primary-bg)' : undefined }}
+                >
+                  <div className={`audit-step-num ${done ? 'done' : active ? 'active' : 'pending'}`}>{done ? '✓' : step.id}</div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 700, fontSize: 13 }}>
+                      <Icon size={14} /> {step.label}
+                    </div>
+                    <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2 }}>{step.desc}</div>
                   </div>
-                  {active && <ChevronRight size={15} color="var(--accent)"/>}
+                  {active && <ChevronRight size={15} color="var(--primary)" />}
                 </div>
               );
             })}
           </div>
         </div>
 
-        {/* Step content */}
-        <div>
-          {currentStep === 0 && (
-            <div className="card">
-              <div style={{ fontWeight:700, fontSize:16, marginBottom:16 }}>1. Kiểm tra trước audit</div>
-              <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
-                <div style={{ padding:'14px', background:'var(--warning-light)', borderRadius:'var(--radius)', border:'1px solid #fde68a' }}>
-                  <div style={{ fontWeight:600, color:'#92400e' }}>⚠ {s.unpaidFolios} folio chưa thanh toán đủ</div>
-                  <div style={{ fontSize:13, color:'#b45309', marginTop:4 }}>Cần xử lý hoặc chuyển công nợ trước khi đóng ngày</div>
-                </div>
-                <div style={{ padding:'14px', background:'var(--success-light)', borderRadius:'var(--radius)', border:'1px solid #a7f3d0' }}>
-                  <div style={{ fontWeight:600, color:'#065f46' }}>✓ Tất cả phòng có khách đã được kiểm tra HK</div>
-                </div>
-                <div style={{ padding:'14px', background:'var(--success-light)', borderRadius:'var(--radius)', border:'1px solid #a7f3d0' }}>
-                  <div style={{ fontWeight:600, color:'#065f46' }}>✓ Không có no-show hôm nay</div>
-                </div>
-              </div>
-              <button className="btn btn-primary" style={{ marginTop:20 }} onClick={()=>completeStep(1)}>
-                Tiếp tục <ChevronRight size={14}/>
-              </button>
+        <div style={{ display: 'grid', gap: 16 }}>
+          {(businessDateQuery.error || precheckQuery.error || runMutation.error) && (
+            <div className="form-error">
+              {errorMessage(businessDateQuery.error ?? precheckQuery.error ?? runMutation.error, 'Không xử lý được Night Audit.')}
             </div>
           )}
 
-          {currentStep === 1 && (
+          {isLoading && (
             <div className="card">
-              <div style={{ fontWeight:700, fontSize:16, marginBottom:16 }}>2. Post room charges</div>
-              <div style={{ marginBottom:16, fontSize:13.5, color:'var(--text-secondary)' }}>
-                Hệ thống sẽ tự động ghi tiền phòng vào folio của tất cả {s.occupiedRooms} phòng đang có khách.
-              </div>
-              <div className="card" style={{ background:'#f9fafb', marginBottom:16 }}>
-                <div style={{ fontWeight:600, marginBottom:8 }}>Tóm tắt charges:</div>
-                <div style={{ display:'flex', justifyContent:'space-between', padding:'8px 0', borderBottom:'1px solid var(--border-light)' }}>
-                  <span>Số phòng post charge</span><strong>{s.occupiedRooms}</strong>
-                </div>
-                <div style={{ display:'flex', justifyContent:'space-between', padding:'8px 0' }}>
-                  <span>Tổng dự kiến post</span><strong style={{ color:'var(--danger)' }}>{fmt(s.todayRevenue)}đ</strong>
-                </div>
-              </div>
-              <button className="btn btn-primary" onClick={()=>completeStep(2)}>
-                ✓ Post {s.occupiedRooms} charges <ChevronRight size={14}/>
-              </button>
+              <strong>Đang kiểm tra dữ liệu vận hành...</strong>
+              <div style={{ color: 'var(--text-secondary)', marginTop: 6, fontSize: 13 }}>Hệ thống đang đọc folio, payment, booking và housekeeping task.</div>
             </div>
           )}
 
-          {currentStep === 2 && (
+          {precheck && (
             <div className="card">
-              <div style={{ fontWeight:700, fontSize:16, marginBottom:16 }}>3. Kiểm tra discrepancy</div>
-              <div style={{ display:'flex', flexDirection:'column', gap:10, marginBottom:16 }}>
-                <div style={{ padding:'14px', background:s.unpaidFolios>0?'var(--warning-light)':'var(--success-light)', borderRadius:'var(--radius)', border:`1px solid ${s.unpaidFolios>0?'#fde68a':'#a7f3d0'}` }}>
-                  <strong>{s.unpaidFolios > 0 ? `⚠ ${s.unpaidFolios} folio còn số dư` : '✓ Tất cả folio đã cân bằng'}</strong>
-                </div>
-                <div style={{ padding:'14px', background:'var(--success-light)', borderRadius:'var(--radius)', border:'1px solid #a7f3d0' }}>
-                  <strong>✓ Tổng payment khớp với folio</strong>
-                </div>
-              </div>
-              <button className="btn btn-primary" onClick={()=>completeStep(3)}>Tiếp tục <ChevronRight size={14}/></button>
-            </div>
-          )}
-
-          {currentStep === 3 && (
-            <div className="card">
-              <div style={{ fontWeight:700, fontSize:16, marginBottom:16 }}>4. Revenue Summary — {today}</div>
-              <div className="audit-summary-grid">
-                {[
-                  { label:'Công suất', value:`${s.occupancyRate}%`, color:'var(--accent)' },
-                  { label:'ADR', value:`${fmt(s.adr)}đ`, color:'var(--success)' },
-                  { label:'RevPAR', value:`${fmt(s.revpar)}đ`, color:'var(--purple)' },
-                  { label:'Doanh thu phòng', value:`${fmt(s.todayRevenue)}đ`, color:'var(--danger)' },
-                  { label:'Số phòng occupied', value:`${s.occupiedRooms}/${s.totalRooms}`, color:'var(--text-primary)' },
-                  { label:'Khách trong nhà', value:`${s.inHouseGuests}`, color:'var(--text-primary)' },
-                ].map(item => (
-                  <div key={item.label} style={{ background:'#f9fafb', borderRadius:'var(--radius)', padding:'14px', textAlign:'center' }}>
-                    <div style={{ fontSize:11, color:'var(--text-secondary)', fontWeight:500, textTransform:'uppercase', letterSpacing:'.04em' }}>{item.label}</div>
-                    <div style={{ fontSize:22, fontWeight:800, color:item.color, marginTop:6 }}>{item.value}</div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start', marginBottom: 16 }}>
+                <div>
+                  <div style={{ fontWeight: 800, fontSize: 17 }}>Pre-check ngày {formatDate(precheck.businessDate)}</div>
+                  <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 4 }}>
+                    Night Audit chỉ được chạy khi không còn blocker nghiệp vụ.
                   </div>
-                ))}
+                </div>
+                <span className={precheck.canRun ? 'badge badge-green' : 'badge badge-red'}>
+                  {precheck.canRun ? 'Sẵn sàng chạy' : 'Cần xử lý'}
+                </span>
               </div>
-              <button className="btn btn-primary" onClick={()=>completeStep(4)}>Tiếp tục <ChevronRight size={14}/></button>
+
+              <PrecheckSummary precheck={precheck} />
+
+              <div style={{ display: 'grid', gap: 10, marginTop: 16 }}>
+                <IssueList title="Departures chưa checkout" count={precheck.summary.openDepartures} items={precheck.blockers.openDepartures} tone="danger" />
+                <IssueList title="Folio còn số dư" count={precheck.summary.unpaidFolios} items={precheck.blockers.unpaidFolios} tone="danger" />
+                <IssueList title="Chuyển khoản folio chờ xác nhận" count={precheck.summary.pendingPayments} items={precheck.blockers.pendingPayments} tone="warning" />
+                <IssueList title="Cọc booking chờ xác nhận" count={precheck.summary.pendingDeposits} items={precheck.blockers.pendingDeposits} tone="warning" />
+                <IssueList title="Housekeeping task còn mở" count={precheck.summary.openHousekeepingTasks} items={precheck.blockers.openHousekeepingTasks} tone="warning" />
+                <IssueList title="Booking sẽ chuyển no-show" count={precheck.summary.noShowCandidates} items={precheck.warnings.noShowCandidates} tone="warning" />
+              </div>
             </div>
           )}
 
-          {currentStep === 4 && (
+          {precheck && (
             <div className="card">
-              <div style={{ fontWeight:700, fontSize:16, marginBottom:8 }}>5. Đóng ngày {today}</div>
-              <div style={{ fontSize:14, color:'var(--text-secondary)', marginBottom:20 }}>
-                Xác nhận đóng ngày kinh doanh. Tất cả dữ liệu sẽ bị lock, không thể chỉnh sửa.
+              <div style={{ fontWeight: 800, fontSize: 17, marginBottom: 8 }}>Chạy Night Audit</div>
+              <div style={{ fontSize: 13.5, color: 'var(--text-secondary)', marginBottom: 16 }}>
+                Khi chạy, hệ thống sẽ post room charge còn thiếu, đánh dấu no-show, tính doanh thu, khóa ngày hiện tại và mở ngày kế tiếp.
               </div>
-              <div style={{ padding:'16px', background:'var(--danger-light)', borderRadius:'var(--radius)', border:'1px solid #fecaca', marginBottom:20 }}>
-                <strong style={{ color:'#991b1b' }}>⚠ Hành động này không thể hoàn tác!</strong>
-                <div style={{ fontSize:13, color:'#b91c1c', marginTop:4 }}>Đảm bảo tất cả bước trên đã được kiểm tra kỹ trước khi đóng ngày.</div>
-              </div>
-              {completed.length >= 4 ? (
-                <button className="btn btn-danger btn-lg" onClick={()=>completeStep(5)}>
-                  <Lock size={16}/> Đóng ngày {today} & Mở ngày mới
-                </button>
-              ) : (
-                <div style={{ color:'var(--text-muted)', fontSize:13 }}>Hoàn thành các bước trước để kích hoạt</div>
+
+              {!precheck.canRun && (
+                <div className="form-error" style={{ marginBottom: 14 }}>
+                  Còn {precheck.blockersCount} blocker. Xử lý các mục phía trên rồi bấm làm mới trước khi chạy.
+                </div>
               )}
+
+              {runResult && (
+                <div style={{ background: 'var(--success-light)', border: '1px solid #bbf7d0', borderRadius: 'var(--radius)', padding: 14, marginBottom: 14 }}>
+                  <strong style={{ color: '#166534' }}>Night Audit đã hoàn tất.</strong>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 10, marginTop: 12 }}>
+                    <div className="kpi-card"><div className="kpi-label">Room charge</div><div className="kpi-value">{runResult.postedRoomCharges}</div></div>
+                    <div className="kpi-card"><div className="kpi-label">No-show</div><div className="kpi-value">{runResult.noShowBookings}</div></div>
+                    <div className="kpi-card"><div className="kpi-label">Doanh thu phòng</div><div className="kpi-value">{money(runResult.roomRevenue)}</div></div>
+                    <div className="kpi-card"><div className="kpi-label">Ngày mới</div><div className="kpi-value">{formatDate(runResult.nextBusinessDate)}</div></div>
+                  </div>
+                </div>
+              )}
+
+              <button
+                className="btn btn-danger btn-lg"
+                disabled={!canRun}
+                onClick={() => runMutation.mutate()}
+              >
+                <Lock size={16} />
+                {runMutation.isPending ? 'Đang đóng ngày...' : `Đóng ngày ${formatDate(businessDate)}`}
+              </button>
             </div>
           )}
 
-          {completed.length >= 5 && (
-            <div style={{ marginTop:16, padding:'20px', background:'var(--success-light)', borderRadius:'var(--radius-lg)', border:'1px solid #a7f3d0', textAlign:'center' }}>
-              <div style={{ fontSize:32, marginBottom:8 }}>🌟</div>
-              <div style={{ fontWeight:700, fontSize:18, color:'#065f46' }}>Night Audit hoàn thành!</div>
-              <div style={{ fontSize:14, color:'#059669', marginTop:4 }}>Ngày {today} đã được đóng thành công.</div>
-            </div>
-          )}
+          <div className="card">
+            <div style={{ fontWeight: 800, fontSize: 17, marginBottom: 12 }}>Log Night Audit</div>
+            {logsQuery.isLoading ? (
+              <div style={{ color: 'var(--text-secondary)', fontSize: 13 }}>Đang tải log...</div>
+            ) : (logsQuery.data?.length ?? 0) === 0 ? (
+              <div className="empty-state" style={{ padding: 20 }}>
+                <Moon size={28} className="empty-state-icon" />
+                <h3>Chưa có log cho ngày này</h3>
+                <p>Log sẽ xuất hiện khi Night Audit chạy thành công.</p>
+              </div>
+            ) : (
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Thời gian</th>
+                      <th>Bước</th>
+                      <th>Người chạy</th>
+                      <th>Tóm tắt</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {logsQuery.data?.map(log => (
+                      <tr key={log.id}>
+                        <td>{formatDate(log.createdAt)}</td>
+                        <td><span className="badge badge-gray">{stepLabel[log.step] ?? log.step}</span></td>
+                        <td>{log.createdByName ?? 'Hệ thống'}</td>
+                        <td style={{ maxWidth: 360, color: 'var(--text-secondary)' }}>
+                          {Object.entries(log.summary ?? {}).slice(0, 3).map(([key, value]) => `${key}: ${String(value)}`).join(' · ')}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>

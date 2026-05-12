@@ -3,14 +3,17 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from '@/features/auth/AuthContext';
 import { canAccessPath, firstAllowedPath } from '@/features/auth/rbac';
 import LoginPage from '@/features/auth/LoginPage';
+import AccountPage from '@/features/account/AccountPage';
 import MainLayout from '@/layouts/MainLayout';
 import DashboardPage from '@/features/dashboard/DashboardPage';
 import RoomsPage from '@/features/rooms/RoomsPage';
 import BookingsPage from '@/features/bookings/BookingsPage';
 import GuestsPage from '@/features/guests/GuestsPage';
+import GuestRequestsPage from '@/features/guest-requests/GuestRequestsPage';
 import ReceptionPage from '@/features/reception/ReceptionPage';
 import HousekeepingPage from '@/features/housekeeping/HousekeepingPage';
 import FolioPage from '@/features/folio/FolioPage';
+import CashieringPage from '@/features/cashiering/CashieringPage';
 import NightAuditPage from '@/features/night-audit/NightAuditPage';
 import ReportsPage from '@/features/reports/ReportsPage';
 import SettingsPage from '@/features/settings/SettingsPage';
@@ -32,8 +35,9 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
 function RouteGuard({ path, children }: { path: string; children: React.ReactNode }) {
   const { user } = useAuth();
-  if (!canAccessPath(user?.role, path)) {
-    return <Navigate to={firstAllowedPath(user?.role)} replace />;
+  const roles = user?.roles ?? user?.role;
+  if (!canAccessPath(roles, path)) {
+    return <Navigate to={firstAllowedPath(roles)} replace />;
   }
   return <>{children}</>;
 }
@@ -56,12 +60,15 @@ function AppRoutes() {
         <Route path="rooms" element={guarded('/rooms', <RoomsPage />)} />
         <Route path="bookings" element={guarded('/bookings', <BookingsPage />)} />
         <Route path="guests" element={guarded('/guests', <GuestsPage />)} />
+        <Route path="guest-requests" element={guarded('/guest-requests', <GuestRequestsPage />)} />
         <Route path="reception" element={guarded('/reception', <ReceptionPage />)} />
         <Route path="housekeeping" element={guarded('/housekeeping', <HousekeepingPage />)} />
         <Route path="folio" element={guarded('/folio', <FolioPage />)} />
+        <Route path="cashiering" element={guarded('/cashiering', <CashieringPage />)} />
         <Route path="night-audit" element={guarded('/night-audit', <NightAuditPage />)} />
         <Route path="reports" element={guarded('/reports', <ReportsPage />)} />
         <Route path="settings" element={guarded('/settings', <SettingsPage />)} />
+        <Route path="account" element={<AccountPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>
@@ -70,7 +77,7 @@ function AppRoutes() {
 
 function DefaultRedirect() {
   const { user } = useAuth();
-  return <Navigate to={firstAllowedPath(user?.role)} replace />;
+  return <Navigate to={firstAllowedPath(user?.roles ?? user?.role)} replace />;
 }
 
 export default function App() {

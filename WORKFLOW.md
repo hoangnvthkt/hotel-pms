@@ -74,22 +74,40 @@ open -> closed -> invoiced
 
 Rule:
 - Balance = tổng debit - tổng credit.
+- Chỉ payment/deposit `posted` hoặc `finalized` mới được tính vào credit.
+- Chuyển khoản bắt đầu ở `pending_verification`; accountant/manager/admin xác nhận xong mới thành `posted`.
+- Tiền mặt được `posted` ngay và gắn vào cashier session của người thu.
 - Checkout chỉ được khi balance = 0, hoặc manager/accountant chuyển sang công nợ.
 - Payment finalized chỉ accountant/admin được sửa hoặc void.
 - Invoice tạo từ folio đã đóng.
+
+### Payment Status
+
+```text
+draft -> pending_verification -> posted -> finalized
+draft -> posted -> finalized
+pending_verification -> voided
+posted -> refunded
+```
+
+Rule:
+- `cash`: receptionist/accountant ghi nhận là `posted` ngay, tạo receipt và đưa vào đối soát ca.
+- `bank_transfer`: ghi nhận là `pending_verification`, chưa giảm balance cho tới khi được duyệt.
+- Refund phải có request và được accountant/manager/admin approve.
 
 ## Vòng Đời Một Lượt Lưu Trú
 
 1. Receptionist tạo hoặc nhận booking.
 2. Hệ thống kiểm tra availability theo room type/date/occupancy/rate.
 3. Booking được tạo ở `tentative` hoặc `confirmed`.
-4. Ngày đến, receptionist xác minh giấy tờ và thông tin C65.
-5. Check-in tạo folio master, chuyển booking `checked_in`, phòng `occupied`.
-6. Trong lúc ở, dịch vụ phát sinh được ghi vào folio.
-7. Checkout kiểm tra balance, ghi payment/refund/công nợ, đóng folio.
-8. Checkout chuyển phòng `vacant_dirty` và tạo HK task.
-9. HK dọn phòng, supervisor inspect, phòng trở lại `vacant_clean`.
-10. Night audit cuối ngày post room charges, xử lý no-show/discrepancy, lock business date.
+4. Nếu yêu cầu cọc: ghi nhận cọc tiền mặt hoặc chuyển khoản; chuyển khoản chờ xác nhận.
+5. Ngày đến, receptionist xác minh giấy tờ và thông tin C65.
+6. Check-in tạo folio master, chuyển booking `checked_in`, phòng `occupied`, apply cọc đã posted/finalized.
+7. Trong lúc ở, dịch vụ phát sinh được ghi vào folio.
+8. Checkout kiểm tra balance, pending transfer, refund/công nợ, đóng folio.
+9. Checkout chuyển phòng `vacant_dirty` và tạo HK task.
+10. HK dọn phòng, supervisor inspect, phòng trở lại `vacant_clean`.
+11. Night audit cuối ngày post room charges, xử lý no-show/discrepancy, lock business date.
 
 ## Exception Flow Bắt Buộc
 

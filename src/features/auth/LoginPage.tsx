@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from './AuthContext';
 
 export default function LoginPage() {
-  const { login, isMockMode, error: authError } = useAuth();
+  const { login, isMockMode, error: authError, resetAuthCache } = useAuth();
   const navigate = useNavigate();
   const [email, setEmail] = useState('admin@grandpalace.vn');
   const [password, setPassword] = useState('admin123');
@@ -30,6 +30,12 @@ export default function LoginPage() {
       accountant: { e: 'ketoan@grandpalace.vn', p: 'acct123' },
     };
     if (creds[role]) { setEmail(creds[role].e); setPassword(creds[role].p); }
+  };
+
+  const clearStaleSession = () => {
+    resetAuthCache();
+    setError('');
+    setLoading(false);
   };
 
   return (
@@ -73,8 +79,11 @@ export default function LoginPage() {
               </div>
             )}
             {authError && !error && (
-              <div style={{ background:'var(--danger-light)', border:'1px solid #fecaca', borderRadius:'var(--radius-md)', padding:'12px 16px', fontSize:14, fontWeight:700, color:'var(--danger)', textAlign:'center' }}>
-                {authError}
+              <div style={{ background:'var(--danger-light)', border:'1px solid #fecaca', borderRadius:'var(--radius-md)', padding:'12px 16px', display:'flex', flexDirection:'column', gap:10, alignItems:'stretch' }}>
+                <div style={{ fontSize:14, fontWeight:700, color:'var(--danger)', textAlign:'center' }}>{authError}</div>
+                <button type="button" className="btn btn-secondary btn-sm" onClick={clearStaleSession}>
+                  Xóa phiên đăng nhập cũ
+                </button>
               </div>
             )}
 

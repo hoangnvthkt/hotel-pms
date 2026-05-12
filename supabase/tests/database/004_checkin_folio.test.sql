@@ -2,7 +2,7 @@ begin;
 
 set search_path = public, extensions;
 
-select plan(7);
+select plan(8);
 
 insert into public.roles (name, description) values
   ('admin', 'Admin'),
@@ -60,7 +60,9 @@ values
   ('40000000-0000-4000-8000-000000000001', '40000000-0000-4000-8000-000000000501', '40000000-0000-4000-8000-000000000301', '2026-05-10 14:00+07', '2026-05-11 12:00+07', 'confirmed'),
   ('40000000-0000-4000-8000-000000000001', '40000000-0000-4000-8000-000000000502', '40000000-0000-4000-8000-000000000302', '2026-05-12 14:00+07', '2026-05-13 12:00+07', 'confirmed');
 
+set local role authenticated;
 select public.fn_check_in_booking('40000000-0000-4000-8000-000000000501', '40000000-0000-4000-8000-000000000301', null);
+reset role;
 
 select is(
   (select status from public.bookings where id = '40000000-0000-4000-8000-000000000501'),
@@ -84,6 +86,19 @@ select is(
   (select count(*)::int from public.folio_items where source_type = 'deposit' and type = 'credit'),
   1,
   'paid deposit is opened as folio credit'
+);
+
+select is(
+  (
+    select count(*)::int
+    from public.audit_logs
+    where entity_type = 'booking'
+      and entity_id = '40000000-0000-4000-8000-000000000501'
+      and action = 'check_in'
+      and actor_id = '40000000-0000-4000-8000-000000000101'
+  ),
+  1,
+  'check-in writes audit log under authenticated RLS'
 );
 
 select public.fn_check_in_booking('40000000-0000-4000-8000-000000000501', '40000000-0000-4000-8000-000000000301', null);
@@ -120,4 +135,3 @@ select ok(
 select * from finish();
 
 rollback;
-

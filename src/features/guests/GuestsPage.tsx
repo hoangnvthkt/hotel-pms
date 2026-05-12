@@ -1,11 +1,13 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { createGuest, deleteGuest, fetchGuests, queryKeys, updateGuest, type GuestMutationInput } from '@/lib/data';
 import { useAuth } from '@/features/auth/AuthContext';
+import { hasPermission } from '@/features/auth/rbac';
 import type { Guest } from '@/types';
 import { Search, Plus, Star, ShieldAlert, Globe, Trash2 } from 'lucide-react';
 
 const fmt = (n:number) => new Intl.NumberFormat('vi-VN').format(n);
+const mockPropertyId = 'prop-001';
 
 const blankGuest = (propertyId: string): GuestMutationInput => ({
   propertyId,
@@ -68,24 +70,40 @@ export default function GuestsPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const guestsQuery = useQuery({ queryKey: queryKeys.guests, queryFn: fetchGuests });
   const guests = guestsQuery.data ?? [];
+  const activePropertyId = user?.propertyId ?? guests[0]?.propertyId ?? '';
+  const formPropertyId = activePropertyId || mockPropertyId;
+  const canManageGuests = hasPermission(user?.roles ?? user?.role, 'guests:manage');
+
+  useEffect(() => {
+    if (!showForm || editing || !activePropertyId) return;
+    setForm(current => current.propertyId === activePropertyId ? current : { ...current, propertyId: activePropertyId });
+  }, [activePropertyId, editing, showForm]);
 
   const saveMutation = useMutation({
     mutationFn: async () => {
       setFormError(null);
+      const propertyId = editing?.propertyId ?? activePropertyId;
+      if (!propertyId) {
+        throw new Error('Không xác định được khách sạn của tài khoản. Vui lòng tải lại trang rồi thử lại.');
+      }
+      if (!canManageGuests) {
+        throw new Error('Tài khoản không có quyền tạo hoặc chỉnh sửa hồ sơ khách.');
+      }
       if (!form.firstName.trim() || !form.lastName.trim() || !form.phone.trim() || !form.documentNumber.trim()) {
         throw new Error('Vui lòng nhập họ tên, SĐT và số giấy tờ.');
       }
       if (!form.dateOfBirth || !form.documentIssueDate || !form.documentIssuePlace || !form.occupation || !form.currentAddress || !form.stayPurpose) {
         throw new Error('Cần đủ trường C65: ngày sinh, ngày/nơi cấp, nghề nghiệp, địa chỉ, lý do lưu trú.');
       }
-      if (editing) await updateGuest(editing.id, form);
-      else await createGuest(form);
+      const payload = { ...form, propertyId };
+      if (editing) await updateGuest(editing.id, payload);
+      else await createGuest(payload);
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.guests });
       setShowForm(false);
       setEditing(null);
-      setForm(blankGuest(user?.propertyId ?? 'prop-001'));
+      setForm(blankGuest(formPropertyId));
     },
     onError: (err) => setFormError(err instanceof Error ? err.message : 'Không lưu được hồ sơ khách.'),
   });
@@ -100,9 +118,13 @@ export default function GuestsPage() {
   });
 
   const openCreate = () => {
+    if (!activePropertyId) {
+      setFormError('Không xác định được khách sạn của tài khoản. Vui lòng tải lại trang rồi thử lại.');
+      return;
+    }
     setSelected(null);
     setEditing(null);
-    setForm(blankGuest(user?.propertyId ?? guests[0]?.propertyId ?? 'prop-001'));
+    setForm(blankGuest(activePropertyId));
     setShowForm(true);
     setFormError(null);
   };
@@ -118,7 +140,7 @@ export default function GuestsPage() {
   const closeForm = () => {
     setShowForm(false);
     setEditing(null);
-    setForm(blankGuest(user?.propertyId ?? 'prop-001'));
+    setForm(blankGuest(formPropertyId));
     setFormError(null);
   };
 
@@ -136,7 +158,7 @@ export default function GuestsPage() {
     <div>
       <div className="page-header">
         <div><h1>Khách hàng</h1><p>{guests.length} hồ sơ · {guests.filter(g=>g.isVip).length} VIP</p></div>
-        <button className="btn btn-primary btn-sm" onClick={openCreate}><Plus size={14}/> Thêm khách</button>
+        <button className="btn btn-primary btn-sm" onClick={openCreate} disabled={!canManageGuests || !activePropertyId}><Plus size={14}/> Thêm khách</button>
       </div>
 
       <div style={{ display:'flex', gap:10, marginBottom:20, flexWrap:'wrap', alignItems:'center' }}>
@@ -260,8 +282,8 @@ export default function GuestsPage() {
             </div>
             <div className="drawer-footer">
               <button className="btn btn-secondary flex-1" onClick={()=>setSelected(null)}>Đóng</button>
-              <button className="btn btn-danger" disabled={deleteMutation.isPending} onClick={()=>deleteMutation.mutate(selected.id)}><Trash2 size={14}/> Xóa</button>
-              <button className="btn btn-primary flex-1" onClick={()=>openEdit(selected)}>Chỉnh sửa</button>
+              {canManageGuests && <button className="btn btn-danger" disabled={deleteMutation.isPending} onClick={()=>deleteMutation.mutate(selected.id)}><Trash2 size={14}/> Xóa</button>}
+              {canManageGuests && <button className="btn btn-primary flex-1" onClick={()=>openEdit(selected)}>Chỉnh sửa</button>}
             </div>
           </div>
         </>

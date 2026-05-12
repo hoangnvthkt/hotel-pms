@@ -8,6 +8,7 @@ export type Permission =
   | 'bookings:manage'
   | 'guests:view'
   | 'guests:manage'
+  | 'guest_requests:manage'
   | 'reception:operate'
   | 'housekeeping:view'
   | 'housekeeping:assign'
@@ -15,6 +16,7 @@ export type Permission =
   | 'folio:view'
   | 'folio:charge'
   | 'payments:finalize'
+  | 'cashiering:reconcile'
   | 'night_audit:run'
   | 'reports:view'
   | 'settings:manage';
@@ -27,6 +29,7 @@ const allPermissions: Permission[] = [
   'bookings:manage',
   'guests:view',
   'guests:manage',
+  'guest_requests:manage',
   'reception:operate',
   'housekeeping:view',
   'housekeeping:assign',
@@ -34,6 +37,7 @@ const allPermissions: Permission[] = [
   'folio:view',
   'folio:charge',
   'payments:finalize',
+  'cashiering:reconcile',
   'night_audit:run',
   'reports:view',
   'settings:manage',
@@ -47,11 +51,14 @@ export const rolePermissions: Record<UserRole, Permission[]> = {
     'bookings:view',
     'bookings:manage',
     'guests:view',
+    'guests:manage',
+    'guest_requests:manage',
     'reception:operate',
     'housekeeping:view',
     'housekeeping:assign',
     'folio:view',
     'folio:charge',
+    'cashiering:reconcile',
     'night_audit:run',
     'reports:view',
     'settings:manage',
@@ -63,13 +70,14 @@ export const rolePermissions: Record<UserRole, Permission[]> = {
     'bookings:manage',
     'guests:view',
     'guests:manage',
+    'guest_requests:manage',
     'reception:operate',
     'folio:view',
     'folio:charge',
   ],
-  hk_supervisor: ['rooms:view', 'housekeeping:view', 'housekeeping:assign', 'housekeeping:update_own'],
-  hk_staff: ['rooms:view', 'housekeeping:view', 'housekeeping:update_own'],
-  accountant: ['dashboard:view', 'folio:view', 'payments:finalize', 'reports:view'],
+  hk_supervisor: ['rooms:view', 'guest_requests:manage', 'housekeeping:view', 'housekeeping:assign', 'housekeeping:update_own'],
+  hk_staff: ['rooms:view', 'guest_requests:manage', 'housekeeping:view', 'housekeeping:update_own'],
+  accountant: ['dashboard:view', 'guest_requests:manage', 'folio:view', 'payments:finalize', 'cashiering:reconcile', 'reports:view'],
 };
 
 export const routePermissions: Record<string, Permission> = {
@@ -77,25 +85,33 @@ export const routePermissions: Record<string, Permission> = {
   '/rooms': 'rooms:view',
   '/bookings': 'bookings:view',
   '/guests': 'guests:view',
+  '/guest-requests': 'guest_requests:manage',
   '/reception': 'reception:operate',
   '/housekeeping': 'housekeeping:view',
   '/folio': 'folio:view',
+  '/cashiering': 'cashiering:reconcile',
   '/night-audit': 'night_audit:run',
   '/reports': 'reports:view',
   '/settings': 'settings:manage',
 };
 
-export function hasPermission(role: UserRole | undefined, permission: Permission): boolean {
-  if (!role) return false;
-  return rolePermissions[role]?.includes(permission) ?? false;
+type RoleInput = UserRole | UserRole[] | undefined;
+
+function normalizeRoles(role: RoleInput): UserRole[] {
+  if (!role) return [];
+  return Array.isArray(role) ? role : [role];
 }
 
-export function canAccessPath(role: UserRole | undefined, path: string): boolean {
+export function hasPermission(role: RoleInput, permission: Permission): boolean {
+  return normalizeRoles(role).some(r => rolePermissions[r]?.includes(permission) ?? false);
+}
+
+export function canAccessPath(role: RoleInput, path: string): boolean {
   const permission = routePermissions[path];
   if (!permission) return true;
   return hasPermission(role, permission);
 }
 
-export function firstAllowedPath(role: UserRole | undefined): string {
+export function firstAllowedPath(role: RoleInput): string {
   return Object.entries(routePermissions).find(([, permission]) => hasPermission(role, permission))?.[0] ?? '/login';
 }
