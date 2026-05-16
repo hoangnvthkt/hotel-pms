@@ -71,6 +71,7 @@ export type FolioItemSourceType =
   | 'laundry'
   | 'restaurant_later'
   | 'event_later'
+  | 'room_adjustment'
   | 'payment'
   | 'deposit'
   | 'refund'
@@ -247,6 +248,28 @@ export interface FolioItem {
   postedBy: string;
 }
 
+export interface FolioProjection {
+  folioId: string;
+  bookingId: string;
+  roomNights: number;
+  ratePerNight: number;
+  postedRoomCharges: number;
+  projectedRoomCharges: number;
+  roomAdjustmentDebits: number;
+  roomAdjustmentCredits: number;
+  roomAdjustmentToCredit: number;
+  roomBalance: number;
+  roomChargeToPost: number;
+  serviceCharges: number;
+  depositCredits: number;
+  paymentCredits: number;
+  pendingFolioPayments: number;
+  pendingDeposits: number;
+  pendingPayments: number;
+  postedBalance: number;
+  projectedBalance: number;
+}
+
 export interface Folio {
   id: string;
   bookingId: string;
@@ -263,6 +286,7 @@ export interface Folio {
   payments?: Payment[];
   receipts?: Receipt[];
   parentFolioId?: string;
+  projection?: FolioProjection;
 }
 
 export interface Payment {
@@ -329,9 +353,27 @@ export interface CashierSession {
   expectedCash: number;
   declaredCash?: number;
   variance?: number;
+  note?: string;
   openedAt: string;
   closedAt?: string;
   approvedAt?: string;
+  approvedBy?: string;
+}
+
+export interface CashierSessionTransaction {
+  id: string;
+  sessionId: string;
+  kind: 'deposit' | 'payment' | 'refund';
+  guestName?: string;
+  bookingNumber?: string;
+  roomNumber?: string;
+  method?: PaymentMethod;
+  status: PaymentStatus;
+  amount: number;
+  reference?: string;
+  receiptNumber?: string;
+  occurredAt: string;
+  actorId?: string;
 }
 
 export interface PaymentVerificationItem {

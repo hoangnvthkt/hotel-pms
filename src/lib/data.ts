@@ -16,10 +16,12 @@ import type {
   BookingStatus,
   BusinessDate,
   CashierSession,
+  CashierSessionTransaction,
   DashboardStats,
   Folio,
   FolioItem,
   FolioItemSourceType,
+  FolioProjection,
   Guest,
   GuestRequest,
   GuestRequestComment,
@@ -285,6 +287,71 @@ function mapPayment(row: any): Payment {
   };
 }
 
+function mapFolioProjection(row: any): FolioProjection {
+  return {
+    folioId: row.folio_id,
+    bookingId: row.booking_id,
+    roomNights: Number(row.room_nights ?? 0),
+    ratePerNight: Number(row.rate_per_night ?? 0),
+    postedRoomCharges: Number(row.posted_room_charges ?? 0),
+    projectedRoomCharges: Number(row.projected_room_charges ?? 0),
+    roomAdjustmentDebits: Number(row.room_adjustment_debits ?? 0),
+    roomAdjustmentCredits: Number(row.room_adjustment_credits ?? 0),
+    roomAdjustmentToCredit: Number(row.room_adjustment_to_credit ?? 0),
+    roomBalance: Number(row.room_balance ?? row.posted_room_charges ?? 0),
+    roomChargeToPost: Number(row.room_charge_to_post ?? 0),
+    serviceCharges: Number(row.service_charges ?? 0),
+    depositCredits: Number(row.deposit_credits ?? 0),
+    paymentCredits: Number(row.payment_credits ?? 0),
+    pendingFolioPayments: Number(row.pending_folio_payments ?? 0),
+    pendingDeposits: Number(row.pending_deposits ?? 0),
+    pendingPayments: Number(row.pending_payments ?? 0),
+    postedBalance: Number(row.posted_balance ?? 0),
+    projectedBalance: Number(row.projected_balance ?? 0),
+  };
+}
+
+function buildLocalFolioProjection(folio: Folio, booking?: any): FolioProjection {
+  const postedRoomCharges = folio.items.filter(item => item.type === 'debit' && item.sourceType === 'room').reduce((sum, item) => sum + item.amount, 0);
+  const roomAdjustmentDebits = folio.items.filter(item => item.type === 'debit' && item.sourceType === 'room_adjustment').reduce((sum, item) => sum + item.amount, 0);
+  const roomAdjustmentCredits = folio.items.filter(item => item.type === 'credit' && item.sourceType === 'room_adjustment').reduce((sum, item) => sum + item.amount, 0);
+  const serviceCharges = folio.items.filter(item => item.type === 'debit' && item.sourceType !== 'room' && item.sourceType !== 'room_adjustment').reduce((sum, item) => sum + item.amount, 0);
+  const depositCredits = folio.items.filter(item => item.type === 'credit' && item.sourceType === 'deposit').reduce((sum, item) => sum + item.amount, 0);
+  const paymentCredits = folio.items.filter(item => item.type === 'credit' && item.sourceType === 'payment').reduce((sum, item) => sum + item.amount, 0);
+  const pendingFolioPayments = (folio.payments ?? []).filter(payment => payment.status === 'pending_verification').reduce((sum, item) => sum + item.amount, 0);
+  const fallbackNights = folio.checkIn && folio.checkOut
+    ? Math.max(Math.round((Date.parse(folio.checkOut) - Date.parse(folio.checkIn)) / 86_400_000), 0)
+    : 0;
+  const roomNights = Math.max(Number(booking?.nights ?? fallbackNights), 0);
+  const ratePerNight = Number(booking?.rate_per_night ?? 0);
+  const roomBalance = postedRoomCharges + roomAdjustmentDebits - roomAdjustmentCredits;
+  const projectedRoomCharges = roomNights * ratePerNight;
+  const roomDelta = projectedRoomCharges - roomBalance;
+  const roomChargeToPost = Math.max(roomDelta, 0);
+
+  return {
+    folioId: folio.id,
+    bookingId: folio.bookingId,
+    roomNights,
+    ratePerNight,
+    postedRoomCharges,
+    projectedRoomCharges,
+    roomAdjustmentDebits,
+    roomAdjustmentCredits,
+    roomAdjustmentToCredit: Math.max(-roomDelta, 0),
+    roomBalance,
+    roomChargeToPost,
+    serviceCharges,
+    depositCredits,
+    paymentCredits,
+    pendingFolioPayments,
+    pendingDeposits: 0,
+    pendingPayments: pendingFolioPayments,
+    postedBalance: folio.balance,
+    projectedBalance: folio.balance + roomDelta,
+  };
+}
+
 function mapBookingDeposit(row: any): BookingDeposit {
   return {
     id: row.id,
@@ -431,6 +498,8 @@ function mapRoomType(row: any): RoomType {
 }
 
 function mapRoom(row: any): Room {
+  const activeAssignment = row.booking_rooms?.find((assignment: any) => assignment.status === 'checked_in');
+  const activeBooking = activeAssignment?.bookings;
   return {
     id: row.id,
     propertyId: row.property_id,
@@ -442,6 +511,9 @@ function mapRoom(row: any): Room {
     isActive: row.is_active,
     notes: row.notes ?? undefined,
     lastCleaned: row.last_cleaned_at ?? undefined,
+    currentGuestName: activeBooking?.guests?.full_name ?? undefined,
+    currentBookingId: activeAssignment?.booking_id ?? activeBooking?.id ?? undefined,
+    checkOutDate: activeAssignment?.check_out?.slice(0, 10) ?? activeBooking?.check_out?.slice(0, 10) ?? undefined,
   };
 }
 
@@ -449,7 +521,7 @@ export async function fetchRooms(): Promise<Room[]> {
   if (useMocks) return mockRooms;
   const { data, error } = await requireSupabaseClient()
     .from('rooms')
-    .select('*, room_types(name)')
+    .select('*, room_types(name), booking_rooms(status, booking_id, check_out, bookings(id, check_out, guests(full_name)))')
     .order('number', { ascending: true });
   if (error) throw error;
   return (data ?? []).map(mapRoom);
@@ -1177,6 +1249,33 @@ export async function checkInBooking(bookingId: string, roomId: string): Promise
   if (error) throw error;
 }
 
+export async function adjustBookingStay(bookingId: string, newCheckOut: string, reason: string): Promise<void> {
+  const checkOut = `${newCheckOut}T12:00:00+07:00`;
+  if (useMocks) {
+    const booking = mockBookings.find(b => b.id === bookingId);
+    if (!booking) return;
+    const newNights = Math.max(1, Math.ceil((Date.parse(newCheckOut) - Date.parse(booking.checkIn)) / 86_400_000));
+    const serviceTotal = mockBookingServices
+      .filter(service => service.bookingId === bookingId)
+      .reduce((sum, service) => sum + service.totalAmount, 0);
+    booking.checkOut = newCheckOut;
+    booking.nights = newNights;
+    booking.totalAmount = booking.ratePerNight * newNights + serviceTotal;
+    const room = mockRooms.find(r => r.currentBookingId === bookingId || r.id === booking.roomId);
+    if (room && (room.currentBookingId === bookingId || booking.status === 'checked_in')) {
+      room.checkOutDate = newCheckOut;
+    }
+    return;
+  }
+
+  const { error } = await requireSupabaseClient().rpc('fn_adjust_booking_stay', {
+    p_booking_id: bookingId,
+    p_new_check_out: checkOut,
+    p_reason: reason,
+  });
+  if (error) throw error;
+}
+
 export async function checkOutBooking(bookingId: string): Promise<void> {
   if (useMocks) {
     const booking = mockBookings.find(b => b.id === bookingId);
@@ -1278,6 +1377,7 @@ function refreshMockCashierTotals() {
 }
 
 function mockFolioForBooking(booking: Booking): Folio {
+  const roomTotal = booking.ratePerNight * booking.nights;
   const base: FolioItem[] = [
     {
       id: `room-${booking.id}`,
@@ -1286,8 +1386,8 @@ function mockFolioForBooking(booking: Booking): Folio {
       sourceType: 'room',
       description: `Tiền phòng ${booking.roomNumber} (${booking.nights} đêm)`,
       quantity: 1,
-      unitPrice: booking.totalAmount,
-      amount: booking.totalAmount,
+      unitPrice: roomTotal,
+      amount: roomTotal,
       date: booking.checkIn,
       postedBy: 'mock',
     },
@@ -1313,6 +1413,17 @@ function mockFolioForBooking(booking: Booking): Folio {
   const totalDebits = items.filter(i => i.type === 'debit').reduce((sum, item) => sum + item.amount, 0);
   const totalCredits = items.filter(i => i.type === 'credit').reduce((sum, item) => sum + item.amount, 0);
   const payments = mockPayments.filter(payment => payment.folioId === `folio-${booking.id}`);
+  const pendingPayments = payments.filter(payment => payment.status === 'pending_verification').reduce((sum, item) => sum + item.amount, 0)
+    + mockBookingDeposits.filter(deposit => deposit.bookingId === booking.id && deposit.status === 'pending_verification').reduce((sum, item) => sum + item.amount, 0);
+  const postedRoomCharges = items.filter(i => i.type === 'debit' && i.sourceType === 'room').reduce((sum, item) => sum + item.amount, 0);
+  const roomAdjustmentDebits = items.filter(i => i.type === 'debit' && i.sourceType === 'room_adjustment').reduce((sum, item) => sum + item.amount, 0);
+  const roomAdjustmentCredits = items.filter(i => i.type === 'credit' && i.sourceType === 'room_adjustment').reduce((sum, item) => sum + item.amount, 0);
+  const serviceCharges = items.filter(i => i.type === 'debit' && i.sourceType !== 'room' && i.sourceType !== 'room_adjustment').reduce((sum, item) => sum + item.amount, 0);
+  const depositCredits = items.filter(i => i.type === 'credit' && i.sourceType === 'deposit').reduce((sum, item) => sum + item.amount, 0);
+  const paymentCredits = items.filter(i => i.type === 'credit' && i.sourceType === 'payment').reduce((sum, item) => sum + item.amount, 0);
+  const roomBalance = postedRoomCharges + roomAdjustmentDebits - roomAdjustmentCredits;
+  const projectedRoomCharges = booking.ratePerNight * booking.nights;
+  const roomDelta = projectedRoomCharges - roomBalance;
   return {
     id: `folio-${booking.id}`,
     bookingId: booking.id,
@@ -1328,6 +1439,27 @@ function mockFolioForBooking(booking: Booking): Folio {
     status: 'open',
     payments,
     receipts: mockReceipts.filter(receipt => receipt.folioId === `folio-${booking.id}` || receipt.bookingId === booking.id),
+    projection: {
+      folioId: `folio-${booking.id}`,
+      bookingId: booking.id,
+      roomNights: booking.nights,
+      ratePerNight: booking.ratePerNight,
+      postedRoomCharges,
+      projectedRoomCharges,
+      roomAdjustmentDebits,
+      roomAdjustmentCredits,
+      roomAdjustmentToCredit: Math.max(-roomDelta, 0),
+      roomBalance,
+      roomChargeToPost: Math.max(roomDelta, 0),
+      serviceCharges,
+      depositCredits,
+      paymentCredits,
+      pendingFolioPayments: payments.filter(payment => payment.status === 'pending_verification').reduce((sum, item) => sum + item.amount, 0),
+      pendingDeposits: mockBookingDeposits.filter(deposit => deposit.bookingId === booking.id && deposit.status === 'pending_verification').reduce((sum, item) => sum + item.amount, 0),
+      pendingPayments,
+      postedBalance: totalDebits - totalCredits,
+      projectedBalance: totalDebits - totalCredits + roomDelta,
+    },
   };
 }
 
@@ -1336,13 +1468,13 @@ export async function fetchOpenFolios(): Promise<Folio[]> {
 
   const { data, error } = await requireSupabaseClient()
     .from('folios')
-    .select('*, folio_items(*), payments(*), receipts(*), bookings(check_in, check_out, guests(full_name), booking_rooms(status, rooms(number)))')
+    .select('*, folio_items(*), payments(*), receipts(*), bookings(check_in, check_out, nights, rate_per_night, guests(full_name), booking_rooms(status, rooms(number)))')
     .eq('status', 'open')
     .is('parent_folio_id', null)
     .order('created_at', { ascending: false });
   if (error) throw error;
 
-  return (data ?? []).map((row: any) => {
+  const mapped = (data ?? []).map((row: any) => {
     const items: FolioItem[] = (row.folio_items ?? []).map((item: any) => ({
       id: item.id,
       folioId: item.folio_id,
@@ -1362,23 +1494,43 @@ export async function fetchOpenFolios(): Promise<Folio[]> {
     const totalCredits = items.filter(i => i.type === 'credit').reduce((sum, item) => sum + item.amount, 0);
     const activeRoom = row.bookings?.booking_rooms?.find((br: any) => br.status === 'checked_in') ?? row.bookings?.booking_rooms?.[0];
     return {
-      id: row.id,
-      bookingId: row.booking_id,
-      propertyId: row.property_id,
-      guestName: row.bookings?.guests?.full_name ?? 'Không rõ',
-      roomNumber: activeRoom?.rooms?.number ?? '—',
-      checkIn: row.bookings?.check_in?.slice(0, 10) ?? '',
-      checkOut: row.bookings?.check_out?.slice(0, 10) ?? '',
-      items,
-      totalDebits,
-      totalCredits,
-      balance: totalDebits - totalCredits,
-      status: row.status,
-      payments,
-      receipts,
-      parentFolioId: row.parent_folio_id ?? undefined,
+      folio: {
+        id: row.id,
+        bookingId: row.booking_id,
+        propertyId: row.property_id,
+        guestName: row.bookings?.guests?.full_name ?? 'Không rõ',
+        roomNumber: activeRoom?.rooms?.number ?? '—',
+        checkIn: row.bookings?.check_in?.slice(0, 10) ?? '',
+        checkOut: row.bookings?.check_out?.slice(0, 10) ?? '',
+        items,
+        totalDebits,
+        totalCredits,
+        balance: totalDebits - totalCredits,
+        status: row.status,
+        payments,
+        receipts,
+        parentFolioId: row.parent_folio_id ?? undefined,
+      } satisfies Folio,
+      booking: row.bookings,
     };
   });
+
+  return Promise.all(mapped.map(async ({ folio, booking }) => {
+    const { data: projection, error: projectionError } = await requireSupabaseClient().rpc('fn_folio_projection', {
+      p_folio_id: folio.id,
+    });
+    if (projectionError) {
+      console.warn('Unable to load folio projection. Falling back to client-side projection.', projectionError);
+      return {
+        ...folio,
+        projection: buildLocalFolioProjection(folio, booking),
+      };
+    }
+    return {
+      ...folio,
+      projection: projection ? mapFolioProjection(projection) : buildLocalFolioProjection(folio, booking),
+    };
+  }));
 }
 
 export async function addFolioCharge(folio: Folio, sourceType: FolioItemSourceType, description: string, amount: number): Promise<void> {
@@ -1734,11 +1886,185 @@ export async function fetchCashierSessions(): Promise<CashierSession[]> {
       expectedCash,
       declaredCash,
       variance: typeof declaredCash === 'number' ? declaredCash - expectedCash : undefined,
+      note: row.note ?? undefined,
       openedAt: row.opened_at,
       closedAt: row.closed_at ?? undefined,
       approvedAt: row.approved_at ?? undefined,
+      approvedBy: row.approved_by ?? undefined,
     };
   });
+}
+
+function bookingMeta(booking: any) {
+  const activeRoom = booking?.booking_rooms?.find((br: any) => br.status === 'checked_in') ?? booking?.booking_rooms?.[0];
+  return {
+    bookingNumber: booking?.booking_number ?? undefined,
+    guestName: booking?.guests?.full_name ?? undefined,
+    roomNumber: activeRoom?.rooms?.number ?? undefined,
+  };
+}
+
+export async function fetchCashierSessionTransactions(sessionId: string): Promise<CashierSessionTransaction[]> {
+  if (!sessionId) return [];
+  if (useMocks) {
+    const payments: CashierSessionTransaction[] = mockPayments
+      .filter(payment => payment.cashierSessionId === sessionId)
+      .map(payment => {
+        const booking = mockBookings.find(item => `folio-${item.id}` === payment.folioId);
+        return {
+          id: payment.id,
+          sessionId,
+          kind: 'payment',
+          guestName: booking?.guestName,
+          bookingNumber: booking?.bookingNumber,
+          roomNumber: booking?.roomNumber,
+          method: payment.method,
+          status: payment.status,
+          amount: payment.amount,
+          reference: payment.reference,
+          receiptNumber: payment.receiptNumber,
+          occurredAt: payment.receivedAt,
+          actorId: payment.receivedBy,
+        };
+      });
+    const deposits: CashierSessionTransaction[] = mockBookingDeposits
+      .filter(deposit => deposit.cashierSessionId === sessionId)
+      .map(deposit => {
+        const booking = mockBookings.find(item => item.id === deposit.bookingId);
+        return {
+          id: deposit.id,
+          sessionId,
+          kind: 'deposit',
+          guestName: booking?.guestName,
+          bookingNumber: booking?.bookingNumber,
+          roomNumber: booking?.roomNumber,
+          method: deposit.method,
+          status: deposit.status,
+          amount: deposit.amount,
+          reference: deposit.reference,
+          receiptNumber: deposit.receiptNumber,
+          occurredAt: deposit.receivedAt,
+          actorId: deposit.receivedBy,
+        };
+      });
+    return [...payments, ...deposits].sort((a, b) => b.occurredAt.localeCompare(a.occurredAt));
+  }
+
+  const client = requireSupabaseClient();
+  const [{ data: payments, error: paymentError }, { data: deposits, error: depositError }, { data: refunds, error: refundError }] = await Promise.all([
+    client
+      .from('payments')
+      .select('*, folios(booking_id, bookings(booking_number, guests(full_name), booking_rooms(status, rooms(number))))')
+      .eq('cashier_session_id', sessionId)
+      .order('received_at', { ascending: false }),
+    client
+      .from('booking_deposits')
+      .select('*, bookings(booking_number, guests(full_name), booking_rooms(status, rooms(number)))')
+      .eq('cashier_session_id', sessionId)
+      .order('received_at', { ascending: false }),
+    client
+      .from('refunds')
+      .select('*, folios(booking_id, bookings(booking_number, guests(full_name), booking_rooms(status, rooms(number))))')
+      .eq('cashier_session_id', sessionId)
+      .order('created_at', { ascending: false }),
+  ]);
+  if (paymentError) throw paymentError;
+  if (depositError) throw depositError;
+  if (refundError) throw refundError;
+
+  const paymentRows: CashierSessionTransaction[] = (payments ?? []).map((row: any) => {
+    const meta = bookingMeta(row.folios?.bookings);
+    return {
+      id: row.id,
+      sessionId,
+      kind: 'payment',
+      ...meta,
+      method: row.method,
+      status: row.status,
+      amount: Number(row.amount),
+      reference: row.reference ?? undefined,
+      receiptNumber: row.receipt_number ?? undefined,
+      occurredAt: row.received_at,
+      actorId: row.received_by ?? undefined,
+    };
+  });
+  const depositRows: CashierSessionTransaction[] = (deposits ?? []).map((row: any) => {
+    const meta = bookingMeta(row.bookings);
+    return {
+      id: row.id,
+      sessionId,
+      kind: 'deposit',
+      ...meta,
+      method: row.method,
+      status: row.status,
+      amount: Number(row.amount),
+      reference: row.reference ?? undefined,
+      receiptNumber: row.receipt_number ?? undefined,
+      occurredAt: row.received_at,
+      actorId: row.received_by ?? undefined,
+    };
+  });
+  const refundRows: CashierSessionTransaction[] = (refunds ?? []).map((row: any) => {
+    const meta = bookingMeta(row.folios?.bookings);
+    return {
+      id: row.id,
+      sessionId,
+      kind: 'refund',
+      ...meta,
+      method: 'cash',
+      status: row.status,
+      amount: Number(row.amount),
+      reference: row.reason ?? undefined,
+      receiptNumber: row.receipt_number ?? undefined,
+      occurredAt: row.approved_at ?? row.created_at,
+      actorId: row.approved_by ?? row.created_by ?? undefined,
+    };
+  });
+  return [...paymentRows, ...depositRows, ...refundRows].sort((a, b) => b.occurredAt.localeCompare(a.occurredAt));
+}
+
+export async function closeCashierSession(sessionId: string, declaredCash: number, note?: string): Promise<void> {
+  if (useMocks) {
+    refreshMockCashierTotals();
+    const session = mockCashierSessions.find(item => item.id === sessionId);
+    if (!session || session.status !== 'open') return;
+    session.status = 'closed';
+    session.declaredCash = declaredCash;
+    session.variance = declaredCash - session.expectedCash;
+    session.note = note || undefined;
+    session.closedAt = new Date().toISOString();
+    return;
+  }
+
+  const { error } = await requireSupabaseClient().rpc('fn_close_cashier_session', {
+    p_session_id: sessionId,
+    p_declared_cash: declaredCash,
+    p_note: note ?? null,
+  });
+  if (error) throw error;
+}
+
+export async function approveCashierSession(sessionId: string, decision: 'approve' | 'void', note?: string): Promise<void> {
+  if (useMocks) {
+    refreshMockCashierTotals();
+    const session = mockCashierSessions.find(item => item.id === sessionId);
+    if (!session || session.status !== 'closed') return;
+    if ((session.variance ?? 0) !== 0 && !note?.trim()) {
+      throw new Error('Ca lệch tiền cần ghi chú trước khi duyệt.');
+    }
+    session.status = decision === 'approve' ? 'approved' : 'voided';
+    session.note = note?.trim() || session.note;
+    session.approvedAt = new Date().toISOString();
+    session.approvedBy = currentMockUser().id;
+    return;
+  }
+
+  const { error } = await requireSupabaseClient().rpc('fn_approve_cashier_session', {
+    p_session_id: sessionId,
+    p_decision: decision,
+    p_note: note ?? null,
+  });
+  if (error) throw error;
 }
 
 export async function requestRefund(folio: Folio, paymentId: string | null, amount: number, reason: string): Promise<void> {

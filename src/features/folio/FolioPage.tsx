@@ -1,10 +1,12 @@
 import React, { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { addFolioCharge, fetchOpenFolios, queryKeys, recordFolioPayment, requestRefund, verifyPayment } from '@/lib/data';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { addFolioCharge, adjustBookingStay, fetchOpenFolios, queryKeys, recordFolioPayment, requestRefund, verifyPayment } from '@/lib/data';
 import { errorMessage } from '@/lib/errors';
 import { useAuth } from '@/features/auth/AuthContext';
 import type { Folio, FolioItemSourceType, PaymentMethod, PaymentStatus } from '@/types';
-import { CheckCircle, CreditCard, FileText, Plus, Printer, Receipt, RotateCcw } from 'lucide-react';
+import StayAdjustmentModal, { type StayAdjustmentTarget } from '@/components/StayAdjustmentModal';
+import { CalendarClock, CheckCircle, CreditCard, FileText, Plus, Printer, Receipt, RotateCcw } from 'lucide-react';
 
 const fmt = (n: number) => new Intl.NumberFormat('vi-VN').format(n);
 
@@ -30,27 +32,49 @@ type Tab = 'folio' | 'payments' | 'refunds' | 'receipts';
 export default function FolioPage() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const foliosQuery = useQuery({ queryKey: queryKeys.folios, queryFn: fetchOpenFolios, refetchInterval: 30_000 });
   const folios = foliosQuery.data ?? [];
+  const today = new Date().toISOString().slice(0, 10);
+  const bookingIdFilter = searchParams.get('bookingId');
+  const folioFilter = searchParams.get('filter');
+  const filterLabel = bookingIdFilter
+    ? 'Đang lọc theo booking'
+    : folioFilter === 'unpaid'
+      ? 'Đang lọc folio còn phải thu'
+      : folioFilter === 'departure_today'
+        ? 'Đang lọc khách đi hôm nay'
+        : '';
+  const visibleFolios = folios.filter(item => {
+    if (bookingIdFilter && item.bookingId !== bookingIdFilter) return false;
+    if (folioFilter === 'unpaid') return (item.projection?.projectedBalance ?? item.balance) > 0;
+    if (folioFilter === 'departure_today') return item.checkOut === today;
+    return true;
+  });
   const [selectedId, setSelectedId] = useState('');
   const [activeTab, setActiveTab] = useState<Tab>('folio');
   const [addPayModal, setAddPayModal] = useState(false);
   const [addChargeModal, setAddChargeModal] = useState(false);
   const [refundModal, setRefundModal] = useState(false);
+  const [stayModal, setStayModal] = useState<StayAdjustmentTarget | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [paymentForm, setPaymentForm] = useState({ method: 'cash' as PaymentMethod, amount: 0, reference: '', evidencePath: '' });
   const [chargeForm, setChargeForm] = useState({ sourceType: 'manual_service' as FolioItemSourceType, description: '', amount: 0 });
   const [refundForm, setRefundForm] = useState({ amount: 0, reason: '', paymentId: '' });
 
-  const effectiveSelectedId = selectedId || folios[0]?.id || '';
-  const folio = folios.find(f => f.id === effectiveSelectedId);
+  const effectiveSelectedId = visibleFolios.some(f => f.id === selectedId) ? selectedId : visibleFolios[0]?.id || '';
+  const folio = visibleFolios.find(f => f.id === effectiveSelectedId);
   const items = folio?.items ?? [];
   const payments = folio?.payments ?? [];
   const receipts = folio?.receipts ?? [];
   const totalDebit = folio?.totalDebits ?? 0;
   const totalCredit = folio?.totalCredits ?? 0;
   const balance = folio?.balance ?? 0;
-  const pendingTotal = payments.filter(p => p.status === 'pending_verification').reduce((sum, item) => sum + item.amount, 0);
+  const projection = folio?.projection;
+  const projectedBalance = projection?.projectedBalance ?? balance;
+  const selectedPendingTotal = projection?.pendingPayments ?? payments.filter(p => p.status === 'pending_verification').reduce((sum, item) => sum + item.amount, 0);
+  const allPendingTotal = visibleFolios.reduce((sum, item) => sum + (item.projection?.pendingPayments ?? item.payments?.filter(p => p.status === 'pending_verification').reduce((paymentSum, payment) => paymentSum + payment.amount, 0) ?? 0), 0);
   const canVerify = ['admin', 'manager', 'accountant'].includes(user?.role ?? '');
 
   const refreshFolios = async () => {
@@ -60,6 +84,7 @@ export default function FolioPage() {
       queryClient.invalidateQueries({ queryKey: queryKeys.cashierSessions }),
       queryClient.invalidateQueries({ queryKey: queryKeys.dashboard }),
       queryClient.invalidateQueries({ queryKey: queryKeys.bookings }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.rooms }),
     ]);
   };
 
@@ -117,9 +142,33 @@ export default function FolioPage() {
     onError: (err) => setActionError(errorMessage(err, 'Không tạo được yêu cầu hoàn tiền.')),
   });
 
+  const stayMutation = useMutation({
+    mutationFn: ({ bookingId, newCheckOut, reason }: { bookingId: string; newCheckOut: string; reason: string }) =>
+      adjustBookingStay(bookingId, newCheckOut, reason),
+    onSuccess: async () => {
+      await refreshFolios();
+      setStayModal(null);
+      setActionError(null);
+    },
+    onError: (err) => setActionError(errorMessage(err, 'Không điều chỉnh được lưu trú.')),
+  });
+
   const openPaymentModal = () => {
-    setPaymentForm(f => ({ ...f, amount: Math.max(balance, 0), method: 'cash' }));
+    setPaymentForm(f => ({ ...f, amount: Math.max(projectedBalance, 0), method: 'cash' }));
     setAddPayModal(true);
+  };
+
+  const openStayModal = () => {
+    if (!folio || !projection) return;
+    setStayModal({
+      bookingId: folio.bookingId,
+      guestName: folio.guestName,
+      roomNumber: folio.roomNumber,
+      checkIn: folio.checkIn,
+      checkOut: folio.checkOut,
+      nights: projection.roomNights,
+      ratePerNight: projection.ratePerNight,
+    });
   };
 
   return (
@@ -127,8 +176,13 @@ export default function FolioPage() {
       <div className="page-header">
         <div>
           <h1>Folio & Cashiering</h1>
-          <p>{folios.length} folio đang mở · {pendingTotal > 0 ? `${fmt(pendingTotal)}đ chờ xác nhận` : 'không có payment pending'}</p>
+          <p>{visibleFolios.length} folio đang hiển thị · {allPendingTotal > 0 ? `${fmt(allPendingTotal)}đ chờ xác nhận` : 'không có payment pending'}</p>
         </div>
+        {filterLabel && (
+          <button className="btn btn-secondary btn-sm" onClick={() => navigate('/folio')}>
+            {filterLabel} · Xem tất cả
+          </button>
+        )}
       </div>
       {actionError && <div className="form-error" style={{ marginBottom: 12 }}>{actionError}</div>}
 
@@ -136,7 +190,7 @@ export default function FolioPage() {
         <div>
           <div className="card" style={{ padding: 0 }}>
             <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--border)', fontWeight: 700, fontSize: 13 }}>Phòng đang có khách</div>
-            {folios.map(f => (
+            {visibleFolios.map(f => (
               <button
                 key={f.id}
                 type="button"
@@ -145,8 +199,8 @@ export default function FolioPage() {
               >
                 <div style={{ fontWeight: 800, color: effectiveSelectedId === f.id ? 'var(--primary-dark)' : undefined }}>P.{f.roomNumber}</div>
                 <div style={{ fontSize: 12.5, color: 'var(--text-secondary)' }}>{f.guestName}</div>
-                <div style={{ fontSize: 12, color: f.balance > 0 ? 'var(--danger)' : 'var(--success)', marginTop: 2 }}>
-                  Balance: {fmt(f.balance)}đ
+                <div style={{ fontSize: 12, color: (f.projection?.projectedBalance ?? f.balance) > 0 ? 'var(--danger)' : 'var(--success)', marginTop: 2 }}>
+                  Tạm tính: {fmt(f.projection?.projectedBalance ?? f.balance)}đ
                 </div>
               </button>
             ))}
@@ -162,17 +216,57 @@ export default function FolioPage() {
                   <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
                     P.{folio.roomNumber} · {folio.checkIn} → {folio.checkOut}
                   </div>
-                  {pendingTotal > 0 && <div style={{ marginTop: 6 }}><span className="badge badge-yellow">{fmt(pendingTotal)}đ chuyển khoản chờ xác nhận</span></div>}
+                  {selectedPendingTotal > 0 && <div style={{ marginTop: 6 }}><span className="badge badge-yellow">{fmt(selectedPendingTotal)}đ chuyển khoản/cọc chờ xác nhận</span></div>}
                 </div>
                 <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Số dư hợp lệ</div>
-                  <div style={{ fontSize: 24, fontWeight: 900, color: balance > 0 ? 'var(--danger)' : balance < 0 ? 'var(--success)' : 'var(--text-primary)' }}>
-                    {balance >= 0 ? '' : '+'}{fmt(Math.abs(balance))}đ
+                  <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Còn phải thu tạm tính</div>
+                  <div style={{ fontSize: 24, fontWeight: 900, color: projectedBalance > 0 ? 'var(--danger)' : projectedBalance < 0 ? 'var(--success)' : 'var(--text-primary)' }}>
+                    {projectedBalance >= 0 ? '' : '+'}{fmt(Math.abs(projectedBalance))}đ
                   </div>
-                  <div style={{ fontSize: 12, color: balance > 0 ? 'var(--danger)' : 'var(--success)' }}>
-                    {balance > 0 ? 'Còn phải thu' : 'Đã đủ hoặc dư tiền'}
+                  <div style={{ fontSize: 12, color: projectedBalance > 0 ? 'var(--danger)' : 'var(--success)' }}>
+                    {projectedBalance > 0 ? `Số dư đã post ${fmt(balance)}đ` : 'Đã đủ hoặc dư tiền'}
                   </div>
                 </div>
+              </div>
+
+              <div className="card" style={{ marginBottom: 16 }}>
+                <div className="card-title" style={{ marginBottom: 12 }}>Tạm tính thanh toán</div>
+                <div className="audit-summary-grid">
+                  <div className="kpi-card">
+                    <div className="kpi-label">Tiền phòng dự kiến</div>
+                    <div className="kpi-value">{fmt(projection?.projectedRoomCharges ?? items.filter(i => i.type === 'debit' && i.sourceType === 'room').reduce((sum, item) => sum + item.amount, 0))}đ</div>
+                  </div>
+                  <div className="kpi-card">
+                    <div className="kpi-label">Dịch vụ / phát sinh</div>
+                    <div className="kpi-value">{fmt(projection?.serviceCharges ?? items.filter(i => i.type === 'debit' && i.sourceType !== 'room' && i.sourceType !== 'room_adjustment').reduce((sum, item) => sum + item.amount, 0))}đ</div>
+                  </div>
+                  <div className="kpi-card">
+                    <div className="kpi-label">Cọc đã áp dụng</div>
+                    <div className="kpi-value" style={{ color: 'var(--success)' }}>-{fmt(projection?.depositCredits ?? items.filter(i => i.type === 'credit' && i.sourceType === 'deposit').reduce((sum, item) => sum + item.amount, 0))}đ</div>
+                  </div>
+                  <div className="kpi-card">
+                    <div className="kpi-label">Thanh toán đã thu</div>
+                    <div className="kpi-value" style={{ color: 'var(--success)' }}>-{fmt(projection?.paymentCredits ?? items.filter(i => i.type === 'credit' && i.sourceType === 'payment').reduce((sum, item) => sum + item.amount, 0))}đ</div>
+                  </div>
+                  <div className="kpi-card">
+                    <div className="kpi-label">Chờ xác nhận</div>
+                    <div className="kpi-value" style={{ color: selectedPendingTotal > 0 ? 'var(--warning)' : 'var(--text-primary)' }}>{fmt(selectedPendingTotal)}đ</div>
+                  </div>
+                  <div className="kpi-card">
+                    <div className="kpi-label">Còn phải thu</div>
+                    <div className="kpi-value" style={{ color: projectedBalance > 0 ? 'var(--danger)' : 'var(--success)' }}>{fmt(projectedBalance)}đ</div>
+                  </div>
+                </div>
+                {projection && projection.roomChargeToPost > 0 && (
+                  <div style={{ marginTop: 12, fontSize: 12.5, color: 'var(--text-secondary)' }}>
+                    Tiền phòng còn ở tạm tính: {fmt(projection.roomChargeToPost)}đ. Khi checkout, hệ thống sẽ post phần này vào folio trước khi kiểm tra thanh toán.
+                  </div>
+                )}
+                {projection && projection.roomAdjustmentToCredit > 0 && (
+                  <div style={{ marginTop: 12, fontSize: 12.5, color: 'var(--success)' }}>
+                    Tiền phòng đang post dư {fmt(projection.roomAdjustmentToCredit)}đ do điều chỉnh lưu trú. Khi checkout, hệ thống sẽ tạo dòng giảm trừ tiền phòng.
+                  </div>
+                )}
               </div>
 
               <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
@@ -182,6 +276,7 @@ export default function FolioPage() {
                   </button>
                 ))}
                 <button className="btn btn-secondary btn-sm" onClick={() => setAddChargeModal(true)}><Plus size={13} /> Thêm charge</button>
+                <button className="btn btn-secondary btn-sm" onClick={openStayModal} disabled={!projection}><CalendarClock size={13} /> Gia hạn</button>
                 <button className="btn btn-primary btn-sm" onClick={openPaymentModal}><CreditCard size={13} /> Thu tiền</button>
                 <button className="btn btn-secondary btn-sm" style={{ marginLeft: 'auto' }} onClick={() => window.print()}><Printer size={13} /> In folio</button>
               </div>
@@ -281,7 +376,7 @@ export default function FolioPage() {
               )}
             </>
           ) : (
-            <div className="card empty-state"><Receipt size={40} className="empty-state-icon" /><h3>Chọn phòng để xem folio</h3></div>
+            <div className="card empty-state"><Receipt size={40} className="empty-state-icon" /><h3>Không có folio phù hợp</h3></div>
           )}
         </div>
       </div>
@@ -373,6 +468,15 @@ export default function FolioPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {stayModal && (
+        <StayAdjustmentModal
+          target={stayModal}
+          isPending={stayMutation.isPending}
+          onClose={() => setStayModal(null)}
+          onSubmit={(newCheckOut, reason) => stayMutation.mutate({ bookingId: stayModal.bookingId, newCheckOut, reason })}
+        />
       )}
     </div>
   );

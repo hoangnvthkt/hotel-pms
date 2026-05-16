@@ -1,9 +1,11 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { createRoom, deleteRoom, fetchRoomTypes, fetchRooms, queryKeys, updateRoomStatus } from '@/lib/data';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { adjustBookingStay, createRoom, deleteRoom, fetchBookings, fetchRoomTypes, fetchRooms, queryKeys, updateRoomStatus } from '@/lib/data';
 import { useAuth } from '@/features/auth/AuthContext';
 import type { Room, RoomStatus } from '@/types';
-import { Search, Filter, Grid3X3, List, BedDouble, Wrench, Trash2 } from 'lucide-react';
+import StayAdjustmentModal, { type StayAdjustmentTarget } from '@/components/StayAdjustmentModal';
+import { Search, Filter, Grid3X3, List, BedDouble, Wrench, Trash2, Receipt, CalendarClock } from 'lucide-react';
 
 const statusConfig: Record<RoomStatus, { label: string; cls: string; dot: string }> = {
   vacant_clean:   { label: 'Sạch — Sẵn sàng', cls: 'vacant-clean',  dot: 'dot-green' },
@@ -25,25 +27,40 @@ const statusCounts = (rooms: Room[]) => ({
   occupied_dirty: rooms.filter(r=>r.status==='occupied_dirty').length,
 });
 
+function parseRoomStatus(value: string | null): RoomStatus | null {
+  return value && value in statusConfig ? value as RoomStatus : null;
+}
+
 export default function RoomsPage() {
   const { user } = useAuth();
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const queryClient = useQueryClient();
+  const routeStatus = parseRoomStatus(searchParams.get('status'));
   const [view, setView] = useState<'grid'|'list'>('grid');
   const [search, setSearch] = useState('');
-  const [filterStatus, setFilterStatus] = useState<RoomStatus|'all'>('all');
+  const [filterStatus, setFilterStatus] = useState<RoomStatus|'all'>(routeStatus ?? 'all');
   const [filterFloor, setFilterFloor] = useState<number|'all'>('all');
   const [filterType, setFilterType] = useState('all');
   const [selectedRoom, setSelectedRoom] = useState<Room|null>(null);
+  const [stayModal, setStayModal] = useState<StayAdjustmentTarget | null>(null);
   const [showAddRoom, setShowAddRoom] = useState(false);
   const [roomForm, setRoomForm] = useState({ number: '', floor: 1, roomTypeId: '', notes: '' });
   const [actionError, setActionError] = useState<string | null>(null);
   const roomsQuery = useQuery({ queryKey: queryKeys.rooms, queryFn: fetchRooms, refetchInterval: 30_000 });
+  const bookingsQuery = useQuery({ queryKey: queryKeys.bookings, queryFn: fetchBookings, refetchInterval: 30_000 });
   const roomTypesQuery = useQuery({ queryKey: queryKeys.roomTypes, queryFn: fetchRoomTypes });
+
+  useEffect(() => {
+    setFilterStatus(routeStatus ?? 'all');
+  }, [routeStatus]);
 
   const floors = [1,2,3,4,5];
   const rooms = roomsQuery.data ?? [];
+  const bookings = bookingsQuery.data ?? [];
   const roomTypes = roomTypesQuery.data ?? [];
   const counts = statusCounts(rooms);
+  const selectedBooking = selectedRoom?.currentBookingId ? bookings.find(booking => booking.id === selectedRoom.currentBookingId) : undefined;
 
   const filtered = rooms.filter(r => {
     if (filterFloor !== 'all' && r.floor !== filterFloor) return false;
@@ -57,6 +74,8 @@ export default function RoomsPage() {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: queryKeys.rooms }),
       queryClient.invalidateQueries({ queryKey: queryKeys.dashboard }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.bookings }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.folios }),
     ]);
   };
 
@@ -100,6 +119,30 @@ export default function RoomsPage() {
     },
     onError: (err) => setActionError(err instanceof Error ? err.message : 'Không xóa/deactivate được phòng.'),
   });
+
+  const stayMutation = useMutation({
+    mutationFn: ({ bookingId, newCheckOut, reason }: { bookingId: string; newCheckOut: string; reason: string }) =>
+      adjustBookingStay(bookingId, newCheckOut, reason),
+    onSuccess: async () => {
+      await invalidateRooms();
+      setStayModal(null);
+      setActionError(null);
+    },
+    onError: (err) => setActionError(err instanceof Error ? err.message : 'Không điều chỉnh được lưu trú.'),
+  });
+
+  const openStayModal = () => {
+    if (!selectedRoom || !selectedBooking) return;
+    setStayModal({
+      bookingId: selectedBooking.id,
+      guestName: selectedBooking.guestName,
+      roomNumber: selectedRoom.number,
+      checkIn: selectedBooking.checkIn,
+      checkOut: selectedBooking.checkOut,
+      nights: selectedBooking.nights,
+      ratePerNight: selectedBooking.ratePerNight,
+    });
+  };
 
   return (
     <div>
@@ -169,6 +212,8 @@ export default function RoomsPage() {
                 <div className="room-grid">
                   {floorRooms.map(room => (
                     <div key={room.id} className={`room-card ${statusConfig[room.status].cls}`}
+                      tabIndex={0}
+                      onKeyDown={event => event.key === 'Enter' && setSelectedRoom(room)}
                       onClick={() => setSelectedRoom(room)}>
                       <div className="room-number">{room.number}</div>
                       <div className="room-type-label">{room.roomTypeName.replace('Phòng ','')}</div>
@@ -187,6 +232,14 @@ export default function RoomsPage() {
                       }}>
                         {room.status === 'out_of_order' ? '⚠ OOO' : statusConfig[room.status].label.split(' — ')[0].split(' — ')[0]}
                       </div>
+                      {room.currentGuestName && (
+                        <div className="room-guest-popover" role="tooltip">
+                          <div className="room-guest-popover-title">{room.currentGuestName}</div>
+                          <div>P.{room.number} · {room.roomTypeName}</div>
+                          <div>Check-out: {room.checkOutDate ?? 'Chưa rõ'}</div>
+                          <div>{statusConfig[room.status].label}</div>
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -278,10 +331,29 @@ export default function RoomsPage() {
             <div className="modal-footer">
               <button className="btn btn-secondary" onClick={()=>setSelectedRoom(null)}>Đóng</button>
               <button className="btn btn-danger" disabled={deleteMutation.isPending} onClick={()=>deleteMutation.mutate(selectedRoom.id)}><Trash2 size={14}/> Deactivate</button>
+              {selectedRoom.currentBookingId && (
+                <button className="btn btn-secondary" onClick={() => navigate(`/folio?bookingId=${selectedRoom.currentBookingId}`)}>
+                  <Receipt size={14}/> Mở Folio
+                </button>
+              )}
+              {selectedRoom.currentBookingId && selectedBooking && (
+                <button className="btn btn-secondary" onClick={openStayModal}>
+                  <CalendarClock size={14}/> Gia hạn
+                </button>
+              )}
               <button className="btn btn-primary"><Wrench size={14}/> Tạo ticket bảo trì</button>
             </div>
           </div>
         </div>
+      )}
+
+      {stayModal && (
+        <StayAdjustmentModal
+          target={stayModal}
+          isPending={stayMutation.isPending}
+          onClose={() => setStayModal(null)}
+          onSubmit={(newCheckOut, reason) => stayMutation.mutate({ bookingId: stayModal.bookingId, newCheckOut, reason })}
+        />
       )}
 
       {showAddRoom && (

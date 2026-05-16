@@ -4,10 +4,11 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
 } from 'recharts';
 import { useQuery } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import {
   BedDouble, Users, TrendingUp, DollarSign,
-  ArrowUpRight, ArrowDownRight, CheckCircle, AlertCircle,
-  Clock, Sparkles, CalendarCheck, LogOut
+  CheckCircle, AlertCircle,
+  Clock, Sparkles, LogOut
 } from 'lucide-react';
 import { mockDashboardStats, mockOccupancyTrend, mockRevenueBreakdown, mockBookingSources } from '@/mock/reports';
 import { fetchBookings, fetchDashboardStats, fetchHKTasks, queryKeys } from '@/lib/data';
@@ -15,12 +16,12 @@ import { format } from 'date-fns';
 
 const fmt = (n: number) => new Intl.NumberFormat('vi-VN').format(n);
 
-function StatCard({ label, value, trendValue, icon: Icon, color, trend }: {
+function StatCard({ label, value, trendValue, icon: Icon, color, trend, onClick }: {
   label: string; value: string; trendValue?: string;
-  icon: React.ElementType; color: string; trend?: 'up'|'down';
+  icon: React.ElementType; color: string; trend?: 'up'|'down'; onClick: () => void;
 }) {
   return (
-    <div className="stat-card">
+    <button type="button" className="stat-card stat-card-clickable" onClick={onClick}>
       <div className="stat-card-accent" style={{ background: color }}></div>
       <div className="stat-card-content">
         <div className="stat-card-top">
@@ -36,11 +37,12 @@ function StatCard({ label, value, trendValue, icon: Icon, color, trend }: {
         <div className="stat-card-label">{label}</div>
         <div className="stat-card-value">{value}</div>
       </div>
-    </div>
+    </button>
   );
 }
 
 export default function DashboardPage() {
+  const navigate = useNavigate();
   const statsQuery = useQuery({ queryKey: queryKeys.dashboard, queryFn: fetchDashboardStats, refetchInterval: 30_000 });
   const bookingsQuery = useQuery({ queryKey: queryKeys.bookings, queryFn: fetchBookings, refetchInterval: 30_000 });
   const hkQuery = useQuery({ queryKey: queryKeys.hkTasks, queryFn: fetchHKTasks, refetchInterval: 30_000 });
@@ -52,6 +54,7 @@ export default function DashboardPage() {
   const arrivals = bookings.filter(b => b.checkIn === today && b.status === 'confirmed');
   const departures = bookings.filter(b => b.checkOut === today && b.status === 'checked_in');
   const pendingHK = hkTasks.filter(t => t.status === 'pending' || t.status === 'in_progress');
+  const go = (path: string) => navigate(path);
 
   return (
     <div className="dashboard-layout">
@@ -65,7 +68,7 @@ export default function DashboardPage() {
             <button className="btn btn-secondary btn-sm" style={{ borderRadius: 20 }}>
               <Clock size={14} /> Hôm nay
             </button>
-            <button className="btn btn-primary btn-sm" style={{ borderRadius: 20, padding: '8px 24px' }}>
+            <button className="btn btn-primary btn-sm" style={{ borderRadius: 20, padding: '8px 24px' }} onClick={() => go('/night-audit')}>
               Night Audit
             </button>
           </div>
@@ -75,16 +78,16 @@ export default function DashboardPage() {
         <div className="grid-4 mb-20">
           <StatCard label="Công suất phòng" value={`${s.occupancyRate}%`}
             trendValue="12.5%" icon={BedDouble}
-            color="var(--accent)" trend="up" />
+            color="var(--accent)" trend="up" onClick={() => go('/rooms?status=occupied')} />
           <StatCard label="Doanh thu hôm nay" value={`${fmt(s.todayRevenue)}đ`}
             trendValue="8.2%" icon={DollarSign}
-            color="var(--primary)" trend="up" />
+            color="var(--primary)" trend="up" onClick={() => go('/reports?metric=revenue&range=today')} />
           <StatCard label="ADR" value={`${fmt(s.adr)}đ`}
             trendValue="2.1%" icon={TrendingUp}
-            color="var(--coral)" trend="down" />
+            color="var(--coral)" trend="down" onClick={() => go('/reports?metric=adr')} />
           <StatCard label="Khách trong nhà" value={String(s.inHouseGuests)}
             trendValue="Tốt" icon={Users}
-            color="var(--primary-light)" trend="up" />
+            color="var(--primary-light)" trend="up" onClick={() => go('/rooms?status=occupied')} />
         </div>
 
         {/* Charts Row */}
@@ -158,7 +161,7 @@ export default function DashboardPage() {
         
         <div className="section-gap" style={{ marginTop: 16 }}>
           {/* Arrivals */}
-          <div className="card card-sm">
+          <div className="card card-sm dashboard-clickable-card" role="button" tabIndex={0} onClick={() => go('/reception?tab=arrivals')} onKeyDown={event => event.key === 'Enter' && go('/reception?tab=arrivals')}>
             <div className="flex items-center justify-between mb-16">
               <div className="card-title" style={{ marginBottom:0, fontSize: 14 }}>
                 <CheckCircle size={15} style={{ color:'var(--success)', verticalAlign:'middle', marginRight:6 }} />
@@ -173,13 +176,13 @@ export default function DashboardPage() {
                   <div style={{ fontWeight:700, fontSize:13 }}>{b.guestName}</div>
                   <div style={{ fontSize:11.5, color:'var(--text-secondary)' }}>P.{b.roomNumber} · {b.roomTypeName}</div>
                 </div>
-                <button className="btn btn-primary btn-sm" style={{ padding: '4px 12px', fontSize: 12 }}>Check-in</button>
+                <button className="btn btn-primary btn-sm" style={{ padding: '4px 12px', fontSize: 12 }} onClick={event => { event.stopPropagation(); go('/reception?tab=arrivals'); }}>Check-in</button>
               </div>
             ))}
           </div>
 
           {/* Departures */}
-          <div className="card card-sm">
+          <div className="card card-sm dashboard-clickable-card" role="button" tabIndex={0} onClick={() => go('/folio?filter=departure_today')} onKeyDown={event => event.key === 'Enter' && go('/folio?filter=departure_today')}>
             <div className="flex items-center justify-between mb-16">
               <div className="card-title" style={{ marginBottom:0, fontSize: 14 }}>
                 <LogOut size={15} style={{ color:'var(--accent-dark)', verticalAlign:'middle', marginRight:6 }} />
@@ -194,13 +197,13 @@ export default function DashboardPage() {
                   <div style={{ fontWeight:700, fontSize:13 }}>{b.guestName}</div>
                   <div style={{ fontSize:11.5, color:'var(--text-secondary)' }}>P.{b.roomNumber}</div>
                 </div>
-                <button className="btn btn-secondary btn-sm" style={{ padding: '4px 12px', fontSize: 12 }}>Folio</button>
+                <button className="btn btn-secondary btn-sm" style={{ padding: '4px 12px', fontSize: 12 }} onClick={event => { event.stopPropagation(); go(`/folio?bookingId=${b.id}`); }}>Folio</button>
               </div>
             ))}
           </div>
 
           {/* HK tasks */}
-          <div className="card card-sm">
+          <div className="card card-sm dashboard-clickable-card" role="button" tabIndex={0} onClick={() => go('/housekeeping?status=open')} onKeyDown={event => event.key === 'Enter' && go('/housekeeping?status=open')}>
             <div className="flex items-center justify-between mb-16">
               <div className="card-title" style={{ marginBottom:0, fontSize: 14 }}>
                 <Sparkles size={15} style={{ color:'var(--coral)', verticalAlign:'middle', marginRight:6 }} />
@@ -231,7 +234,7 @@ export default function DashboardPage() {
                   {s.unpaidFolios} Folio chưa thanh toán
                 </div>
                 <div style={{ fontSize: 12, fontWeight: 500, marginBottom: 8 }}>Cần xử lý trước khi Audit.</div>
-                <button className="btn btn-sm" style={{ background:'var(--coral)', color:'#fff', border:'none', borderRadius: 20 }}>Xem folio</button>
+                <button className="btn btn-sm" style={{ background:'var(--coral)', color:'#fff', border:'none', borderRadius: 20 }} onClick={() => go('/folio?filter=unpaid')}>Xem folio</button>
               </div>
             </div>
           )}
@@ -240,4 +243,3 @@ export default function DashboardPage() {
     </div>
   );
 }
-

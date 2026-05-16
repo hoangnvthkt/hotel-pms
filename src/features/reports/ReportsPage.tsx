@@ -1,5 +1,6 @@
 import React from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
 import { BarChart, Bar, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, PieChart, Pie, Cell } from 'recharts';
 import { mockOccupancyTrend, mockRevenueBreakdown, mockBookingSources, mockDashboardStats } from '@/mock/reports';
 import { fetchDashboardStats, queryKeys } from '@/lib/data';
@@ -8,8 +9,18 @@ import { Download, FileText } from 'lucide-react';
 const fmt = (n: number) => new Intl.NumberFormat('vi-VN').format(n);
 
 export default function ReportsPage() {
+  const [searchParams] = useSearchParams();
   const statsQuery = useQuery({ queryKey: queryKeys.dashboard, queryFn: fetchDashboardStats, refetchInterval: 30_000 });
   const s = statsQuery.data ?? mockDashboardStats;
+  const metric = searchParams.get('metric');
+  const range = searchParams.get('range');
+  const activeRevenueToday = metric === 'revenue' && range === 'today';
+  const summaryItems = [
+    { key:'revenue', label: activeRevenueToday ? 'Doanh thu hôm nay' : 'Doanh thu tháng', value:`${fmt(activeRevenueToday ? s.todayRevenue : s.monthRevenue)}đ`, color:'var(--accent)' },
+    { key:'occupancy', label:'Công suất tháng', value:`${s.occupancyRate}%`, color:'var(--success)' },
+    { key:'adr', label:'ADR tháng', value:`${fmt(s.adr)}đ`, color:'var(--purple)' },
+    { key:'revpar', label:'RevPAR tháng', value:`${fmt(s.revpar)}đ`, color:'var(--warning)' },
+  ];
   return (
     <div>
       <div className="page-header">
@@ -22,13 +33,8 @@ export default function ReportsPage() {
 
       {/* Summary row */}
       <div className="grid-4 mb-20">
-        {[
-          { label:'Doanh thu tháng', value:`${fmt(s.monthRevenue)}đ`, color:'var(--accent)' },
-          { label:'Công suất tháng', value:`${s.occupancyRate}%`, color:'var(--success)' },
-          { label:'ADR tháng', value:`${fmt(s.adr)}đ`, color:'var(--purple)' },
-          { label:'RevPAR tháng', value:`${fmt(s.revpar)}đ`, color:'var(--warning)' },
-        ].map(item=>(
-          <div key={item.label} className="card" style={{ textAlign:'center' }}>
+        {summaryItems.map(item=>(
+          <div key={item.key} className="card" style={{ textAlign:'center', borderColor: metric === item.key ? 'var(--accent)' : undefined, boxShadow: metric === item.key ? '0 0 0 2px var(--accent-light)' : undefined }}>
             <div className="kpi-label">{item.label}</div>
             <div className="kpi-number" style={{ color:item.color, marginTop:8 }}>{item.value}</div>
           </div>

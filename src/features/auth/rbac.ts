@@ -74,6 +74,7 @@ export const rolePermissions: Record<UserRole, Permission[]> = {
     'reception:operate',
     'folio:view',
     'folio:charge',
+    'cashiering:reconcile',
   ],
   hk_supervisor: ['rooms:view', 'guest_requests:manage', 'housekeeping:view', 'housekeeping:assign', 'housekeeping:update_own'],
   hk_staff: ['rooms:view', 'guest_requests:manage', 'housekeeping:view', 'housekeeping:update_own'],

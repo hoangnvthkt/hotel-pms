@@ -1,5 +1,6 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
 import {
   assignHKTask,
   createHKTask,
@@ -59,8 +60,11 @@ const blankTaskForm: Omit<HKTaskMutationInput, 'propertyId'> = {
 export default function HousekeepingPage() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
+  const [searchParams] = useSearchParams();
+  const routeStatusFilter = searchParams.get('status') === 'open' ? 'open' : 'all';
   const [tab, setTab] = useState<'board' | 'lost'>('board');
   const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'open'>(routeStatusFilter);
   const [floorFilter, setFloorFilter] = useState<'all' | string>('all');
   const [assigneeFilter, setAssigneeFilter] = useState<'all' | 'unassigned' | string>('all');
   const [showCreateTask, setShowCreateTask] = useState(false);
@@ -83,8 +87,14 @@ export default function HousekeepingPage() {
   const lostFound = lostFoundQuery.data ?? [];
   const floors = useMemo(() => [...new Set(rawTasks.map(task => task.floor))].sort((a, b) => a - b), [rawTasks]);
 
+  useEffect(() => {
+    setStatusFilter(routeStatusFilter);
+    if (routeStatusFilter === 'open') setTab('board');
+  }, [routeStatusFilter]);
+
   const tasks = rawTasks.filter(task => {
     if (isHKStaffOnly && task.assignedTo !== user?.id) return false;
+    if (statusFilter === 'open' && !['pending', 'in_progress', 'done', 'rejected'].includes(task.status)) return false;
     if (floorFilter !== 'all' && String(task.floor) !== floorFilter) return false;
     if (assigneeFilter === 'unassigned' && task.assignedTo) return false;
     if (!['all', 'unassigned'].includes(assigneeFilter) && task.assignedTo !== assigneeFilter) return false;
@@ -211,7 +221,7 @@ export default function HousekeepingPage() {
       {tab === 'board' ? (
         <>
           <div className="card" style={{ marginBottom: 16 }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 130px 220px', gap: 10 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 130px 220px 130px', gap: 10 }}>
               <div className="search-box">
                 <Search size={15} color="var(--text-muted)" />
                 <input placeholder="Tìm phòng, nhân viên, loại task..." value={search} onChange={event => setSearch(event.target.value)} />
@@ -225,6 +235,9 @@ export default function HousekeepingPage() {
                 <option value="unassigned">Chưa giao</option>
                 {hkStaff.map(staff => <option key={staff.id} value={staff.id}>{staff.name}</option>)}
               </select>
+              <button className={`btn btn-sm ${statusFilter === 'open' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setStatusFilter(statusFilter === 'open' ? 'all' : 'open')}>
+                Task mở
+              </button>
             </div>
           </div>
 

@@ -1,4 +1,5 @@
 import type { RoomType, Room, RoomRate, RoomStatus } from '@/types';
+import { mockBookings } from './bookings';
 
 export const mockRoomTypes: RoomType[] = [
   {
@@ -124,9 +125,10 @@ export const mockRooms: Room[] = roomConfig.flatMap(({ floor, start, types }) =>
     const roomType = mockRoomTypes.find(rt => rt.id === typeId)!;
     const status = pick(statuses, roomIdx);
     const isOccupied = status === 'occupied' || status === 'occupied_dirty' || status === 'occupied_clean';
-    const guestName = isOccupied ? pick(guestNames, roomIdx) : undefined;
+    const activeBooking = mockBookings.find(booking => booking.roomId === `room-${number}` && booking.status === 'checked_in');
+    const guestName = activeBooking?.guestName ?? (isOccupied ? pick(guestNames, roomIdx) : undefined);
     const checkOutDate = isOccupied
-      ? new Date(Date.now() + pick([1, 2, 3, 5], roomIdx) * 86400000).toISOString().slice(0, 10)
+      ? activeBooking?.checkOut ?? new Date(Date.now() + pick([1, 2, 3, 5], roomIdx) * 86400000).toISOString().slice(0, 10)
       : undefined;
     roomIdx++;
     return {
@@ -141,7 +143,7 @@ export const mockRooms: Room[] = roomConfig.flatMap(({ floor, start, types }) =>
       notes: status === 'out_of_order' ? 'Đang bảo trì điều hòa' : undefined,
       lastCleaned: status === 'vacant_clean' ? '2026-05-08T08:00:00' : undefined,
       currentGuestName: guestName,
-      currentBookingId: isOccupied ? `BK-2026-${number}` : undefined,
+      currentBookingId: activeBooking?.id,
       checkOutDate,
     };
   })

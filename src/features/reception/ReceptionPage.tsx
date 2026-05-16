@@ -1,19 +1,34 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { checkInBooking, checkOutBooking, fetchBookings, queryKeys } from '@/lib/data';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { adjustBookingStay, checkInBooking, checkOutBooking, fetchBookings, queryKeys } from '@/lib/data';
 import type { Booking } from '@/types';
-import { CheckCircle, LogOut, UserPlus, ArrowRightLeft } from 'lucide-react';
+import StayAdjustmentModal, { type StayAdjustmentTarget } from '@/components/StayAdjustmentModal';
+import { CalendarClock, CheckCircle, LogOut, UserPlus, ArrowRightLeft } from 'lucide-react';
 import { format } from 'date-fns';
 
 const today = new Date().toISOString().slice(0, 10);
 const fmt = (n: number) => new Intl.NumberFormat('vi-VN').format(n);
+type ReceptionTab = 'arrivals'|'inhouse'|'departures';
+
+function parseReceptionTab(value: string | null): ReceptionTab | null {
+  return value === 'arrivals' || value === 'inhouse' || value === 'departures' ? value : null;
+}
 
 export default function ReceptionPage() {
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const queryClient = useQueryClient();
-  const [tab, setTab] = useState<'arrivals'|'inhouse'|'departures'>('arrivals');
+  const routeTab = parseReceptionTab(searchParams.get('tab'));
+  const [tab, setTab] = useState<ReceptionTab>(routeTab ?? 'arrivals');
   const [actionError, setActionError] = useState<string | null>(null);
+  const [stayModal, setStayModal] = useState<StayAdjustmentTarget | null>(null);
   const bookingsQuery = useQuery({ queryKey: queryKeys.bookings, queryFn: fetchBookings, refetchInterval: 30_000 });
   const bookings = bookingsQuery.data ?? [];
+
+  useEffect(() => {
+    if (routeTab) setTab(routeTab);
+  }, [routeTab]);
 
   const arrivals = bookings.filter(b => b.checkIn === today && b.status === 'confirmed');
   const inHouse = bookings.filter(b => b.status === 'checked_in');
@@ -30,6 +45,7 @@ export default function ReceptionPage() {
       queryClient.invalidateQueries({ queryKey: queryKeys.folios }),
       queryClient.invalidateQueries({ queryKey: queryKeys.hkTasks }),
       queryClient.invalidateQueries({ queryKey: queryKeys.dashboard }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.cashierSessions }),
     ]);
   };
 
@@ -50,6 +66,29 @@ export default function ReceptionPage() {
     },
     onError: (err) => setActionError(err instanceof Error ? err.message : 'Không check-out được.'),
   });
+
+  const stayMutation = useMutation({
+    mutationFn: ({ bookingId, newCheckOut, reason }: { bookingId: string; newCheckOut: string; reason: string }) =>
+      adjustBookingStay(bookingId, newCheckOut, reason),
+    onSuccess: async () => {
+      await invalidateOps();
+      setStayModal(null);
+      setActionError(null);
+    },
+    onError: (err) => setActionError(err instanceof Error ? err.message : 'Không điều chỉnh được lưu trú.'),
+  });
+
+  const openStayModal = (booking: Booking) => {
+    setStayModal({
+      bookingId: booking.id,
+      guestName: booking.guestName,
+      roomNumber: booking.roomNumber,
+      checkIn: booking.checkIn,
+      checkOut: booking.checkOut,
+      nights: booking.nights,
+      ratePerNight: booking.ratePerNight,
+    });
+  };
 
   return (
     <div>
@@ -100,10 +139,16 @@ export default function ReceptionPage() {
               {tab === 'inhouse' && (
                 <>
                   <button className="btn btn-secondary btn-sm"><ArrowRightLeft size={14}/> Đổi phòng</button>
-                  <button className="btn btn-secondary btn-sm">Folio</button>
+                  <button className="btn btn-secondary btn-sm" onClick={() => openStayModal(b)}><CalendarClock size={14}/> Gia hạn</button>
+                  <button className="btn btn-secondary btn-sm" onClick={() => navigate(`/folio?bookingId=${b.id}`)}>Folio</button>
                 </>
               )}
-              {tab === 'departures' && <button className="btn btn-primary" disabled={checkOutMutation.isPending} onClick={()=>checkOutMutation.mutate(b)}>⬡ Check-out</button>}
+              {tab === 'departures' && (
+                <>
+                  <button className="btn btn-secondary btn-sm" onClick={() => openStayModal(b)}><CalendarClock size={14}/> Gia hạn</button>
+                  <button className="btn btn-primary" disabled={checkOutMutation.isPending} onClick={()=>checkOutMutation.mutate(b)}>⬡ Check-out</button>
+                </>
+              )}
             </div>
           </div>
         ))}
@@ -115,6 +160,14 @@ export default function ReceptionPage() {
           </div>
         )}
       </div>
+      {stayModal && (
+        <StayAdjustmentModal
+          target={stayModal}
+          isPending={stayMutation.isPending}
+          onClose={() => setStayModal(null)}
+          onSubmit={(newCheckOut, reason) => stayMutation.mutate({ bookingId: stayModal.bookingId, newCheckOut, reason })}
+        />
+      )}
     </div>
   );
 }
